@@ -1,6 +1,6 @@
 # M2.1 Live Shadow Data Pipeline
 
-Status: **IMPLEMENTED / VALIDATION REQUIRED / DO NOT MERGE**
+Status: **LIVE SHADOW VALIDATED / DO NOT MERGE**
 
 Branch: `m2-1-live-shadow`
 
@@ -16,11 +16,23 @@ A live capture must be explicitly initiated by an authenticated admin session. T
 
 ## D1 migration
 
-Apply:
+Applied and validated:
 
 `migrations/0005_m21_live_capture.sql`
 
 It adds `adaptive_live_capture_sessions`, containing only a random session id and timestamps. No IP, User-Agent, or telemetry is stored in this table.
+
+Health validation confirmed:
+
+- `m21_live_capture_code_ready:true`
+- `m21_live_capture_schema_ready:true`
+- `m21_live_capture_ready:true`
+- `m21_live_capture_requires_admin_session:true`
+- `m21_live_capture_one_time_tokens:true`
+- `m21_live_feedback_label_sync_ready:true`
+- `m21_enforcing:false`
+- `m21_ai_decisions_are_training_labels:false`
+- raw IP/User-Agent/full telemetry storage flags are `false`
 
 ## Endpoints
 
@@ -89,16 +101,115 @@ The adaptive fingerprint remains a keyed pseudonymous D1 operational identifier 
 - no automatic labeling
 - no ordinary traffic is silently promoted to dataset-eligible by this branch
 
-## Validation required
+## Real live validation — first observation
 
-Before this branch is considered validated:
+Controlled real mobile live capture produced event:
 
-1. Apply migration `0005_m21_live_capture.sql` in the test Cloudflare D1 database.
-2. Confirm `_health` reports `m21_live_capture_schema_ready:true` and `m21_live_capture_ready:true`.
-3. Create one admin live-capture session and open it on a real ES mobile device.
-4. Confirm the resulting event has `scope:live`, `dataset_eligible:true`, R2 key under `events/`, and no raw identifiers.
-5. Confirm neutral live reputation mirrors V6.3.
-6. Apply one explicit feedback label to that event.
-7. Confirm the feedback affects only `live` reputation and creates an R2 key under `labels/`.
-8. Confirm the one-time token cannot be submitted again.
-9. Keep enforcement disabled.
+`3fcbeff7-23b1-479a-b19f-e8f02e219011`
+
+Observed properties:
+
+- `scope:live`
+- `dataset_eligible:true`
+- `token_consumed:true`
+- D1 event write: success
+- R2 event write: success
+- R2 key: `events/2026/08/29/3fcbeff7-23b1-479a-b19f-e8f02e219011.json`
+- adaptive shadow observation: success
+- V6.3 decision: `allow`
+- decision stage: `post_ai`
+- local risk: `0`
+- spoof signals: `0`
+- V7 base risk: `5`
+- neutral live ASN reputation: `50`
+- neutral live fingerprint reputation: `50`
+- V7 decision: `allow`
+- V7 risk: `5`
+- comparison: `same`
+- reason: `neutral_reputation_mirrors_v63`
+- no raw IP, User-Agent, or full telemetry stored
+- AI decision was not used as a truth label
+
+This validates the neutral live path: a real dataset-eligible event is stored and V7 mirrors V6.3 before explicit feedback exists.
+
+## Explicit live truth label validation
+
+The first live event was explicitly labeled:
+
+- label: `human_confirmed`
+- confidence: `100`
+- `training_eligible:true`
+- `affects_live_reputation:true`
+- ASN reputation: `50 -> 60`
+- fingerprint reputation: `50 -> 60`
+- historical prediction rewritten: `false`
+- notes stored: `false`
+- R2 label sync attempted: `true`
+- R2 label write: `true`
+- R2 label key: `labels/2026/08/29/3fcbeff7-23b1-479a-b19f-e8f02e219011.json`
+
+This validates the explicit truth-label path:
+
+`real live event -> explicit feedback -> live reputation update -> R2 truth label`
+
+## Real live validation — subsequent adaptive effect
+
+A second controlled live capture from the same browser/device context produced event:
+
+`dbc25137-bde0-424b-ab0d-5940470134d5`
+
+Observed properties:
+
+- `scope:live`
+- `dataset_eligible:true`
+- `token_consumed:true`
+- D1 write: success
+- R2 event write: success
+- R2 key: `events/2026/08/29/dbc25137-bde0-424b-ab0d-5940470134d5.json`
+- adaptive observation write: success
+- V6.3 decision: `allow`
+- local risk: `0`
+- V7 base risk: `5`
+- ASN reputation: approximately `60`, feedback count `1`, observation count `2`
+- fingerprint reputation: approximately `60`, feedback count `1`, observation count `2`
+- ASN adjustment: `0`
+- fingerprint adjustment: `-1`
+- V7 risk: `4`
+- V7 decision: `allow`
+- comparison: `same`
+- reason includes `fingerprint_reputation:-1`
+- no raw IP/User-Agent/full telemetry stored
+- AI decision was not used as a truth label
+
+This validates the complete live learning loop:
+
+`REAL EVENT -> EXPLICIT TRUTH LABEL -> LIVE REPUTATION -> NEXT REAL EVENT -> ADAPTIVE RISK EFFECT`
+
+The expected time decay is visible in the weights (`~0.9999`) and does not indicate instability.
+
+The second observation also exercised the V6.3 critic path: the first classifier result had zero classification confidence, so the critic ran and returned a clean `allow / human_mobile` result at confidence 90. The final V6.3 decision remained `allow`; this is recorded as an observed shadow-path behavior, not as training truth.
+
+## Checkpoint conclusion
+
+**M2.1 Live Shadow Data Pipeline validation checkpoint passed for the implemented controlled live pipeline.**
+
+Validated end-to-end behavior:
+
+`admin-issued live session -> one-time live submission -> sanitized D1/R2 event -> V6.3 decision -> V7 live shadow comparison -> explicit truth label -> live reputation -> R2 label -> subsequent adaptive effect`
+
+M2.1 remains:
+
+- shadow-only
+- `enforcing:false`
+- stacked on validated M2
+- isolated from production V6.3
+- not approved for merge or enforcement
+
+## Remaining before any future promotion decision
+
+- Accumulate a substantially larger set of explicitly labeled real live events.
+- Measure false-positive/false-negative rates and V6.3-vs-V7 disagreement rates.
+- Validate hostile real-world labels only when ground truth is known; never manufacture hostile labels on real humans.
+- Monitor fingerprint stability across browser/device/network changes.
+- Define minimum evidence requirements before adaptive reputation can materially influence a future enforcement experiment.
+- Define rollback and promotion criteria before any merge or enforcement discussion.
