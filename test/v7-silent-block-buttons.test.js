@@ -29,20 +29,22 @@ test("production owns one final Telegram verdict and suppresses lower duplicate"
   assert.match(production, /buildTelegramDecisionMessage/);
 });
 
-test("final Telegram button is direct exact-IP HMAC and browser independent", () => {
+test("final Telegram control is event-bound for learning with direct exact-IP fallback", () => {
+  assert.match(production, /rememberEventIpKey/);
+  assert.match(production, /buildTelegramCallbackKeyboard/);
   assert.match(production, /buildTelegramIpKeyCallbackKeyboard/);
   assert.match(production, /deriveManualIpKey\(env\.CHALLENGE_SECRET, clientIp\(request\)\)/);
   assert.match(production, /manual_ip_control_ready: telegram\.keyboardReady/);
-  assert.match(production, /v7_telegram_buttons_direct_exact_ip_hmac: true/);
   assert.match(production, /v7_telegram_buttons_browser_independent: true/);
-  assert.doesNotMatch(production, /rememberEventIpKey/);
-  assert.doesNotMatch(production, /buildTelegramCallbackKeyboard/);
+  assert.match(production, /operator feedback learning active/);
 });
 
-test("webhook self-healing is not used as a condition for attaching the button", () => {
-  const keyboardIndex = production.indexOf("const keyboard = await buildTelegramIpKeyCallbackKeyboard");
+test("webhook self-healing is not used as a condition for attaching either keyboard", () => {
+  const eventKeyboardIndex = production.indexOf("keyboard = await buildTelegramCallbackKeyboard");
+  const fallbackKeyboardIndex = production.indexOf("keyboard = await buildTelegramIpKeyCallbackKeyboard");
   const webhookIndex = production.indexOf("const webhook = await ensureTelegramWebhook");
-  assert.ok(keyboardIndex >= 0);
-  assert.ok(webhookIndex > keyboardIndex);
-  assert.doesNotMatch(production, /if \(webhookConfigured\)[\s\S]{0,300}buildTelegramIpKeyCallbackKeyboard/);
+  assert.ok(eventKeyboardIndex >= 0);
+  assert.ok(fallbackKeyboardIndex > eventKeyboardIndex);
+  assert.ok(webhookIndex > fallbackKeyboardIndex);
+  assert.doesNotMatch(production, /if \(webhookConfigured\)[\s\S]{0,300}buildTelegram/);
 });
