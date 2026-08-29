@@ -171,11 +171,17 @@ export function computeV7ShadowDecision({
     );
   }
 
+  const hasAdaptiveEffect = asnAdjustment !== 0 || fingerprintAdjustment !== 0;
   let v7Decision;
 
   if (v63Decision === "block" && HARD_V63_STAGES.has(decisionStage)) {
     v7Decision = "block";
     reasons.push(`preserve_hard_policy:${decisionStage}`);
+  } else if (!hasAdaptiveEffect && ["allow", "block", "review"].includes(v63Decision)) {
+    // Neutral reputation must not create artificial disagreements. M2 is testing
+    // the effect of learning, not replacing the V6.3 decision engine.
+    v7Decision = v63Decision;
+    reasons.push("neutral_reputation_mirrors_v63");
   } else if (v7Risk >= 68) {
     v7Decision = "block";
     reasons.push("adaptive_risk_block");
