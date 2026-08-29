@@ -10,6 +10,10 @@ const operational = readFileSync(
   new URL("../src/m22-operational-monitor-entry.js", import.meta.url),
   "utf8"
 );
+const policyWrapper = readFileSync(
+  new URL("../src/m22-policy-enforcing-entry.js", import.meta.url),
+  "utf8"
+);
 const deepHelper = readFileSync(
   new URL("../src/adaptive/monitor-deep-inspection.js", import.meta.url),
   "utf8"
@@ -54,17 +58,28 @@ test("root path is rewritten into the operational monitor page", () => {
   assert.match(operational, /m22_root_monitor_ready: true/);
 });
 
+test("country policy precedes mobile-only and monitor AI", () => {
+  assert.match(policyWrapper, /countryAllowed/);
+  assert.match(policyWrapper, /return operationalWorker\.fetch\(request, env, ctx\)/);
+  assert.match(policyWrapper, /evaluateV63MobileGate/);
+  assert.match(policyWrapper, /BLOCK_BY_DEVICE/);
+  assert.match(policyWrapper, /desktop_not_allowed/);
+  assert.match(policyWrapper, /status: 404/);
+  assert.match(policyWrapper, /m22_policy_enforcement_order/);
+});
+
 test("public check has privacy-preserving anti-flood limiter", () => {
   assert.match(operational, /checkMonitorRateLimit/);
   assert.match(operational, /Too Many Monitor Requests/);
   assert.match(operational, /m22_rate_limit_ready/);
+  assert.match(policyWrapper, /checkMonitorRateLimit/);
   assert.match(rateLimit, /HMAC/);
   assert.match(rateLimit, /networkBucket/);
   assert.match(rateLimit, /m22rl_/);
   assert.doesNotMatch(rateLimit, /INSERT[^;]*raw_ip/i);
 });
 
-test("deep monitor remains non-enforcing and excluded from training", () => {
+test("deep monitor remains excluded from training while explicit policy gates enforce", () => {
   assert.match(source, /dataset_eligible: false/);
   assert.match(source, /training_eligible: false/);
   assert.match(source, /enforcing: false/);
@@ -72,13 +87,14 @@ test("deep monitor remains non-enforcing and excluded from training", () => {
   assert.match(source, /raw_ip_stored: false/);
   assert.match(source, /user_agent_stored: false/);
   assert.match(source, /raw_telemetry_stored: false/);
-  assert.match(operational, /enforcing: false/);
   assert.match(operational, /dataset_eligible: false/);
   assert.match(operational, /training_eligible: false/);
+  assert.match(policyWrapper, /m22_ai_bot_enforcing: false/);
+  assert.match(policyWrapper, /m22_mobile_only_desktop_enforcing/);
 });
 
-test("wrangler routes preview through operational public monitor", () => {
-  assert.match(wrangler, /"main": "src\/m22-operational-monitor-entry\.js"/);
+test("wrangler routes preview through policy-enforcing public monitor", () => {
+  assert.match(wrangler, /"main": "src\/m22-policy-enforcing-entry\.js"/);
   assert.match(wrangler, /"ALLOWED_COUNTRIES": "ES"/);
   assert.match(wrangler, /"MOBILE_ONLY": "true"/);
 });
