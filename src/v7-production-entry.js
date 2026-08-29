@@ -10,8 +10,16 @@ function isMonitorPage(pathname) {
 }
 
 function silentRedirectShell(html) {
-  const silentHead = `<style id="v7-silent-redirect-style">html.v7-silent-redirect,html.v7-silent-redirect body{margin:0!important;min-height:100%;background:#fff!important;overflow:hidden!important}html.v7-silent-redirect body>*:not(script){display:none!important}</style><script>document.documentElement.classList.add("v7-silent-redirect");setTimeout(()=>document.documentElement.classList.remove("v7-silent-redirect"),4000);</script>`;
+  const silentHead = `<style id="v7-silent-redirect-style">html[data-v7-silent="1"],html[data-v7-silent="1"] body{margin:0!important;width:100%!important;height:100%!important;min-height:100%!important;visibility:hidden!important;opacity:0!important;background:transparent!important;overflow:hidden!important}html[data-v7-silent="1"] body>*:not(script){display:none!important}</style>`;
   return html
+    .replace(
+      '<html lang="en">',
+      '<html lang="en" data-v7-silent="1" style="visibility:hidden!important;opacity:0!important;background:transparent!important">'
+    )
+    .replace(
+      "<body>",
+      '<body style="visibility:hidden!important;opacity:0!important;background:transparent!important;margin:0!important">'
+    )
     .replace("<title>V7 Public Traffic Monitor</title>", "<title></title>")
     .replace("</head>", `${silentHead}</head>`);
 }
@@ -38,6 +46,8 @@ async function enrichHealth(request, env, ctx) {
       v7_origin_redirect_enabled: state.originEnabled,
       v7_block_redirect_enabled: state.blockEnabled,
       v7_silent_probe_enabled: state.originEnabled && state.blockEnabled,
+      v7_silent_probe_strict_hidden: state.originEnabled && state.blockEnabled,
+      v7_silent_probe_visible_fallback: false,
       v7_redirect_country_block: "BLOCK_URL_OR_404_FALLBACK",
       v7_redirect_device_block: "BLOCK_URL_OR_404_FALLBACK",
       v7_redirect_manual_ip_block: "BLOCK_URL_OR_404_FALLBACK",
@@ -69,7 +79,7 @@ async function injectRedirectClient(response, env) {
   const silentReady = state.originEnabled && state.blockEnabled;
   if (silentReady) html = silentRedirectShell(html);
 
-  const injected = `${marker}\n      if (response.ok && data && data.redirect_enforcing === true && typeof data.redirect_url === \"string\" && data.redirect_url) {\n        window.location.replace(data.redirect_url);\n        return;\n      }\n      document.documentElement.classList.remove(\"v7-silent-redirect\");`;
+  const injected = `${marker}\n      if (response.ok && data && data.redirect_enforcing === true && typeof data.redirect_url === \"string\" && data.redirect_url) {\n        window.location.replace(data.redirect_url);\n        return;\n      }`;
 
   const headers = new Headers(response.headers);
   headers.set("cache-control", "no-store");
@@ -83,10 +93,9 @@ async function injectRedirectClient(response, env) {
 async function handleMonitorPage(request, env, ctx) {
   const response = await policyWorker.fetch(request, env, ctx);
 
-  // Known policy/manual blocks return 404 in the lower layer. In production:
-  // - valid BLOCK_URL + REDIRECT_ENFORCING=true => 302 to BLOCK_URL
-  // - missing/invalid BLOCK_URL => preserve the 404 fallback
-  // Rate limits and non-404 errors remain untouched.
+  // Known policy/manual/rate-limit blocks return 404 in the lower layer.
+  // In production a valid BLOCK_URL converts that response to a redirect;
+  // without BLOCK_URL the 404 remains the fail-safe fallback.
   if (response.status === 404) {
     const redirected = redirectResponse(request, env, "block");
     if (redirected) return redirected;

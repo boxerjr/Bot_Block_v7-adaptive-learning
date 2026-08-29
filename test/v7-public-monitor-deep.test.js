@@ -72,15 +72,21 @@ test("country policy precedes mobile-only and monitor AI", () => {
   assert.match(policyWrapper, /m22_policy_enforcement_order/);
 });
 
-test("public check has privacy-preserving anti-flood limiter", () => {
+test("public check has exact-IP privacy-preserving limiter with automatic block", () => {
   assert.match(operational, /checkMonitorRateLimit/);
-  assert.match(operational, /Too Many Monitor Requests/);
-  assert.match(operational, /m22_rate_limit_ready/);
+  assert.match(operational, /AUTO_BLOCK_RATE_LIMIT/);
+  assert.match(operational, /m22_rate_limit_per_minute_per_exact_ip/);
+  assert.match(operational, /m22_rate_limit_auto_block_exact_ip: true/);
+  assert.match(operational, /return blockResponse\(\)/);
   assert.match(policyWrapper, /checkMonitorRateLimit/);
-  assert.match(rateLimit, /HMAC/);
-  assert.match(rateLimit, /networkBucket/);
+  assert.match(rateLimit, /deriveManualIpKey/);
+  assert.match(rateLimit, /setManualIpBlocked/);
+  assert.match(rateLimit, /exactIp: true/);
+  assert.match(rateLimit, /autoBlockEnabled: true/);
   assert.match(rateLimit, /m22rl_/);
+  assert.doesNotMatch(rateLimit, /networkBucket/);
   assert.doesNotMatch(rateLimit, /INSERT[^;]*raw_ip/i);
+  assert.doesNotMatch(operational, /Too Many Monitor Requests/);
 });
 
 test("deep monitor stays excluded from training while production wrapper owns redirect enforcement", () => {
@@ -98,9 +104,10 @@ test("deep monitor stays excluded from training while production wrapper owns re
   assert.match(production, /v7_redirect_enforcing/);
 });
 
-test("wrangler routes production through V7 redirect entry", () => {
+test("wrangler routes production through V7 redirect entry with 3 per minute", () => {
   assert.match(wrangler, /"main": "src\/v7-production-entry\.js"/);
   assert.match(wrangler, /"ALLOWED_COUNTRIES": "ES"/);
   assert.match(wrangler, /"MOBILE_ONLY": "true"/);
   assert.match(wrangler, /"REDIRECT_ENFORCING": "true"/);
+  assert.match(wrangler, /"RATE_LIMIT_PER_MIN": "3"/);
 });
