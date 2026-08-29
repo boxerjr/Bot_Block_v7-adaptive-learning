@@ -8,6 +8,13 @@ import {
   classifyAsn,
   getAsnIntelligenceHealth,
 } from "./adaptive/asn-intelligence.js";
+import { classifyOrganization } from "./adaptive/org-intelligence.js";
+import {
+  getOrgHardPolicyHealth,
+  getOrgPromotedHardAsn,
+  organizationRequiresHardBlock,
+  promoteOrgAsnToHard,
+} from "./adaptive/org-hard-policy.js";
 
 function waitUntil(ctx, promise) {
   if (ctx?.waitUntil) ctx.waitUntil(promise);
@@ -48,7 +55,7 @@ function blockResponse() {
 }
 
 function buildAsnBlockMessage(network = {}, intel = {}) {
-  return [
+  const lines = [
     "🚫 BLOCK_BY_ASN",
     `ASN: ${clean(network.asn || "?")}`,
     `Org: ${clean(network.org || "?")}`,
@@ -56,12 +63,24 @@ function buildAsnBlockMessage(network = {}, intel = {}) {
     `ASNClass: ${clean(intel.tier || "hard")}`,
     `ASNSource: ${clean(intel.source || "unknown")}`,
     `Reason: ${clean(intel.reason || "hard_block_asn")}`,
-    "PolicyOrder: ASN before country",
+  ];
+
+  if (intel.orgClass) {
+    lines.push(
+      `OrgClass: ${clean(intel.orgClass)}`,
+      `OrgRule: ${clean(intel.matchedRule || "none")}`,
+      `ASNPromotedHard: ${intel.persisted === false ? "pending_or_unavailable" : "true"}`
+    );
+  }
+
+  lines.push(
+    "PolicyOrder: HARD ASN / HOSTING-VPN ORG before country",
     "Decision: block",
     "Enforcement: BLOCK_URL or 404 fallback",
     "DatasetEligible: false",
-    "RawIP/UA stored: false",
-  ].join("\n");
+    "RawIP/UA stored: false"
+  );
+  return lines.join("\n");
 }
 
 function buildDeviceBlockMessage(network = {}, gate = {}) {
@@ -80,6 +99,21 @@ function buildDeviceBlockMessage(network = {}, gate = {}) {
   ].join("\n");
 }
 
+async function enforceAsnBlock(request, env, ctx, network, intel) {
+  const limiter = await checkMonitorRateLimit({
+    db: env.DB,
+    secret: env.CHALLENGE_SECRET,
+    ip: clientIp(request),
+    limit: rateLimitPerMinute(env),
+  });
+
+  if (limiter.allowed) {
+    waitUntil(ctx, sendTelegramWithKeyboard(env, buildAsnBlockMessage(network, intel), null));
+  }
+
+  return blockResponse();
+}
+
 async function health(request, env, ctx) {
   const response = await operationalWorker.fetch(request, env, ctx);
   let data;
@@ -89,12 +123,22 @@ async function health(request, env, ctx) {
     return response;
   }
 
-  const asnHealth = await getAsnIntelligenceHealth(env);
+  const [asnHealth, orgHardHealth] = await Promise.all([
+    getAsnIntelligenceHealth(env),
+    getOrgHardPolicyHealth(env),
+  ]);
 
   return Response.json(
     {
       ...data,
-      m22_policy_enforcement_order: ["hard_asn", "country", "mobile_only_device", "manual_ip", "monitor_ai"],
+      m22_policy_enforcement_order: [
+        "hard_asn",
+        "hosting_vpn_org_to_hard_asn",
+        "country",
+        "mobile_only_device",
+        "manual_ip",
+        "monitor_ai",
+      ],
       m22_asn_policy_precedes_country: true,
       m22_asn_hard_block_enforcing: asnHealth.hardBlockEnabled,
       m22_asn_static_hard_count: asnHealth.staticHardCount,
@@ -103,6 +147,10 @@ async function health(request, env, ctx) {
       m22_asn_spamhaus_drop_enabled: asnHealth.spamhausEnabled,
       m22_asn_spamhaus_drop_active_count: asnHealth.spamhausCount,
       m22_asn_spamhaus_last_success_ms: asnHealth.spamhausLastSuccessMs,
+      m22_org_hard_block_enabled: orgHardHealth.enabled,
+      m22_org_promoted_hard_asn_count: orgHardHealth.promotedAsnCount,
+      m22_org_hard_classes: ["hosting_cloud", "vpn_proxy"],
+      m22_org_hard_policy_is_training_truth: false,
       m22_asn_block_title: "BLOCK_BY_ASN",
       m22_mobile_only_policy_enabled: boolEnv(env.MOBILE_ONLY, true),
       m22_mobile_only_policy_precedes_monitor_verdict: true,
@@ -118,23 +166,42 @@ async function health(request, env, ctx) {
 async function monitorPage(request, env, ctx) {
   const network = networkInfo(request);
 
-  // Hard ASN intelligence is evaluated before country. This allows known
-  // datacenter/high-confidence malicious infrastructure to be attributed and
-  // blocked as ASN traffic instead of being hidden behind BLOCK_BY_COUNTRY.
+  // 1) An ASN previously learned from a high-confidence hosting/VPN Org is a
+  // permanent hard policy ASN and is enforced before all other policy gates.
+  const learnedOrgAsn = await getOrgPromotedHardAsn(env, network.asn);
+  if (learnedOrgAsn?.hardBlock) {
+    return enforceAsnBlock(request, env, ctx, network, {
+      ...learnedOrgAsn,
+      persisted: true,
+    });
+  }
+
+  // 2) Static V6.3 hard ASNs and high-confidence external ASN intelligence.
   const asnIntel = await classifyAsn(env, network.asn);
   if (asnIntel.hardBlock) {
-    const limiter = await checkMonitorRateLimit({
-      db: env.DB,
-      secret: env.CHALLENGE_SECRET,
-      ip: clientIp(request),
-      limit: rateLimitPerMinute(env),
+    return enforceAsnBlock(request, env, ctx, network, asnIntel);
+  }
+
+  // 3) Organization intelligence. Hosting/cloud and VPN/proxy organizations
+  // are a deterministic deny policy for this deployment. The current request
+  // is blocked immediately and its ASN is persisted as a hard ASN for future
+  // requests. This is policy intelligence, not an ML ground-truth bot label.
+  const orgIntel = classifyOrganization(network.org);
+  if (organizationRequiresHardBlock(env, orgIntel)) {
+    const promotion = await promoteOrgAsnToHard(env, network.asn, orgIntel);
+    return enforceAsnBlock(request, env, ctx, network, {
+      tier: "hard",
+      source: "org_policy_auto",
+      reason: promotion.promoted
+        ? promotion.reason
+        : orgIntel.class === "vpn_proxy"
+          ? "organization_vpn_proxy_hard_policy"
+          : "organization_hosting_cloud_hard_policy",
+      hardBlock: true,
+      orgClass: orgIntel.class,
+      matchedRule: orgIntel.matchedRule,
+      persisted: promotion.promoted,
     });
-
-    if (limiter.allowed) {
-      waitUntil(ctx, sendTelegramWithKeyboard(env, buildAsnBlockMessage(network, asnIntel), null));
-    }
-
-    return blockResponse();
   }
 
   if (!countryAllowed(env, network.country)) {
