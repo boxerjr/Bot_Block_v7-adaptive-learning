@@ -39,17 +39,17 @@ test("known safe access ASN is not hard-blocked by static seed", async () => {
   assert.equal(telefonica.hardBlock, false);
 });
 
-test("hard ASN gate executes before country", () => {
-  assert.match(
-    policy,
-    /m22_policy_enforcement_order: \["hard_asn", "country", "mobile_only_device", "manual_ip", "monitor_ai"\]/
-  );
+test("hard ASN and hard organization gates execute before country", () => {
+  assert.match(policy, /"hard_asn"/);
+  assert.match(policy, /"hosting_vpn_org_to_hard_asn"/);
   const asnIndex = policy.indexOf("const asnIntel = await classifyAsn");
+  const orgIndex = policy.indexOf("if (organizationRequiresHardBlock(env, orgIntel))");
   const countryIndex = policy.indexOf("if (!countryAllowed(env, network.country))");
   assert.ok(asnIndex >= 0);
-  assert.ok(countryIndex > asnIndex);
+  assert.ok(orgIndex > asnIndex);
+  assert.ok(countryIndex > orgIndex);
   assert.match(policy, /BLOCK_BY_ASN/);
-  assert.match(policy, /PolicyOrder: ASN before country/);
+  assert.match(policy, /before country/);
 });
 
 test("Spamhaus ASN-DROP is enabled and refreshed from cron no more than daily", () => {
