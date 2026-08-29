@@ -2,10 +2,18 @@ import m22DeepWorker from "./m22-deep-monitor-entry-v2.js";
 import { clientIp, networkInfo } from "./engine/network.js";
 import { checkMonitorRateLimit } from "./adaptive/monitor-rate-limit.js";
 import { deriveMonitorVerdict } from "./adaptive/monitor-verdict.js";
+import { buildTelegramDecisionMessage } from "./adaptive/telegram.js";
 import {
-  buildTelegramDecisionMessage,
-  sendTelegram,
-} from "./adaptive/telegram.js";
+  buildManualIpKeyboard,
+  clearManualIpBlocked,
+  deriveManualIpKey,
+  getEventIpKey,
+  isManualIpBlocked,
+  rememberEventIpKey,
+  sendTelegramWithKeyboard,
+  setManualIpBlocked,
+  verifyManualIpActionToken,
+} from "./adaptive/manual-ip-block.js";
 
 function waitUntil(ctx, promise) {
   if (ctx?.waitUntil) ctx.waitUntil(promise);
@@ -67,6 +75,14 @@ function rebuildPolicy(data = {}) {
   };
 }
 
+function htmlEscape(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
 async function operationalHealth(request, env, ctx) {
   const response = await m22DeepWorker.fetch(request, env, ctx);
   let data;
@@ -92,6 +108,11 @@ async function operationalHealth(request, env, ctx) {
       m22_rate_limit_ready: !!env.DB && !!env.CHALLENGE_SECRET,
       m22_rate_limit_per_minute_per_network: rateLimitPerMinute(env),
       m22_rate_limit_raw_ip_stored: false,
+      m22_manual_ip_control_ready: !!env.DB && !!env.CHALLENGE_SECRET,
+      m22_manual_ip_control_exact_ip: true,
+      m22_manual_ip_control_raw_ip_stored: false,
+      m22_manual_ip_block_enforcing: true,
+      m22_automated_enforcing: false,
       m22_enforcing: false,
       m22_dataset_eligible: false,
     },
@@ -100,10 +121,25 @@ async function operationalHealth(request, env, ctx) {
 }
 
 async function operationalCheck(request, env, ctx) {
+  const ip = clientIp(request);
+
+  if (env.DB && env.CHALLENGE_SECRET) {
+    const ipKey = await deriveManualIpKey(env.CHALLENGE_SECRET, ip);
+    if (ipKey && (await isManualIpBlocked(env.DB, ipKey))) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: {
+          "cache-control": "no-store",
+          "x-robots-tag": "noindex, nofollow",
+        },
+      });
+    }
+  }
+
   const result = await checkMonitorRateLimit({
     db: env.DB,
     secret: env.CHALLENGE_SECRET,
-    ip: clientIp(request),
+    ip,
     limit: rateLimitPerMinute(env),
   });
 
@@ -119,6 +155,72 @@ async function operationalCheck(request, env, ctx) {
   }
 
   return m22DeepWorker.fetch(request, env, ctx);
+}
+
+async function handleManualIpAction(request, env, ctx) {
+  if (request.method !== "GET") {
+    return new Response("Method Not Allowed", { status: 405 });
+  }
+  if (!env.DB || !env.CHALLENGE_SECRET) {
+    return new Response("Manual IP control unavailable.", { status: 503 });
+  }
+
+  const token = new URL(request.url).searchParams.get("token") || "";
+  const payload = await verifyManualIpActionToken(env.CHALLENGE_SECRET, token);
+  if (!payload) {
+    return new Response("Invalid or expired action.", {
+      status: 401,
+      headers: { "cache-control": "no-store", "x-robots-tag": "noindex, nofollow" },
+    });
+  }
+
+  const ipKey = await getEventIpKey(env.DB, payload.event_id);
+  if (!ipKey) {
+    return new Response("Event IP mapping is no longer available.", {
+      status: 404,
+      headers: { "cache-control": "no-store", "x-robots-tag": "noindex, nofollow" },
+    });
+  }
+
+  const success = payload.action === "block"
+    ? await setManualIpBlocked(env.DB, ipKey, payload.event_id)
+    : await clearManualIpBlocked(env.DB, ipKey);
+
+  if (!success) {
+    return new Response("Manual IP action failed.", {
+      status: 500,
+      headers: { "cache-control": "no-store", "x-robots-tag": "noindex, nofollow" },
+    });
+  }
+
+  const blocked = payload.action === "block";
+  const title = blocked ? "🚫 IP BLOCKED" : "🔓 IP UNBLOCKED";
+  const telegramText = [
+    title,
+    `Event: ${String(payload.event_id).slice(0, 8)}`,
+    "Scope: exact IP only",
+    "Raw IP stored: false",
+    blocked ? "Future requests from this exact IP receive 404." : "This exact IP can access the monitor again.",
+  ].join("\n");
+  waitUntil(ctx, sendTelegramWithKeyboard(env, telegramText, null));
+
+  const heading = blocked ? "🚫 IP blocked" : "🔓 IP unblocked";
+  const detail = blocked
+    ? "Future requests from this exact IP will receive HTTP 404 on the V7 test monitor."
+    : "This exact IP can access the V7 test monitor again.";
+
+  return new Response(
+    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>V7 Manual IP Control</title></head><body style="font-family:system-ui;padding:32px;max-width:720px;margin:auto"><h1>${htmlEscape(heading)}</h1><p>${htmlEscape(detail)}</p><p>Exact-IP HMAC match; raw IP is not stored.</p></body></html>`,
+    {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "x-robots-tag": "noindex, nofollow",
+        "referrer-policy": "no-referrer",
+      },
+    }
+  );
 }
 
 async function operationalSubmit(request, env, ctx) {
@@ -171,11 +273,28 @@ async function operationalSubmit(request, env, ctx) {
     ? "MonitorDeepInspection: continued through local/fingerprint/AI"
     : "MonitorDeepInspection: policy gates passed normally";
 
+  let manualIpMapped = false;
+  let manualKeyboard = null;
+  if (env.DB && env.CHALLENGE_SECRET && data.event_id) {
+    try {
+      const ipKey = await deriveManualIpKey(env.CHALLENGE_SECRET, clientIp(request));
+      manualIpMapped = !!ipKey && await rememberEventIpKey(env.DB, data.event_id, ipKey);
+      if (manualIpMapped) {
+        manualKeyboard = await buildManualIpKeyboard(request.url, env.CHALLENGE_SECRET, data.event_id);
+      }
+    } catch {}
+  }
+
+  const manualLine = manualIpMapped
+    ? "ManualIPControl: exact IP — BLOCK / UNBLOCK buttons available"
+    : "ManualIPControl: unavailable";
+
   waitUntil(
     ctx,
-    sendTelegram(
+    sendTelegramWithKeyboard(
       env,
-      `${telegramCore}\n${countryLine}\n${deviceLine}\n${inspectionLine}`
+      `${telegramCore}\n${countryLine}\n${deviceLine}\n${inspectionLine}\n${manualLine}`,
+      manualKeyboard
     )
   );
 
@@ -202,6 +321,11 @@ async function operationalSubmit(request, env, ctx) {
       monitor_final_decision: monitorVerdict.decision,
       monitor_is_bot: ["automation", "crawler"].includes(monitorVerdict.classification),
       monitor_is_spoof: monitorVerdict.classification === "spoofed_device",
+      manual_ip_control_ready: manualIpMapped,
+      manual_ip_control_exact_ip: true,
+      manual_ip_raw_stored: false,
+      automated_enforcing: false,
+      manual_ip_block_enforcing: true,
       enforcing: false,
       dataset_eligible: false,
       training_eligible: false,
@@ -216,6 +340,9 @@ export default {
 
     if (url.pathname === "/_health") {
       return operationalHealth(request, env, ctx);
+    }
+    if (url.pathname === "/_telegram/ip-action") {
+      return handleManualIpAction(request, env, ctx);
     }
     if (url.pathname === "/" || url.pathname === "") {
       return operationalCheck(monitorPageRequest(request), env, ctx);
