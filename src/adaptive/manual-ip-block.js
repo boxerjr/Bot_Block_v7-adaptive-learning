@@ -1,3 +1,10 @@
+import {
+  getAdaptiveEventContext,
+  getAdaptiveFeedbackForEvent,
+  insertAdaptiveFeedback,
+  rebuildAdaptiveReputation,
+} from "../storage/adaptive-d1.js";
+
 function bytesToB64url(bytes) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -58,6 +65,88 @@ function eventPrefix(eventId) {
 
 function blockSid(ipKey) {
   return `m22blk_${String(ipKey || "")}`;
+}
+
+function looksLikeEventId(value) {
+  return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+    String(value || "")
+  );
+}
+
+export async function recordOperatorFalseNegative(db, eventId, nowMs = Date.now()) {
+  if (!db || !looksLikeEventId(eventId)) {
+    return { learned: false, reason: "event_unavailable" };
+  }
+
+  try {
+    const context = await getAdaptiveEventContext(db, eventId);
+    if (!context) return { learned: false, reason: "event_not_found" };
+
+    // An operator BLOCK is a false-negative label only when V6.3 originally
+    // allowed the observation. Existing bot/spoof blocks are not relabeled.
+    if (context.v63Decision !== "allow") {
+      return { learned: false, reason: "original_decision_not_allow" };
+    }
+
+    const existing = await getAdaptiveFeedbackForEvent(db, eventId);
+    if (existing) {
+      return {
+        learned: false,
+        reason: "feedback_already_exists",
+        label: existing.label || null,
+      };
+    }
+
+    const nowIso = new Date(nowMs).toISOString();
+    await insertAdaptiveFeedback(db, {
+      eventId,
+      scope: context.scope,
+      label: "false_negative",
+      confidence: 100,
+      notes: null,
+      asn: context.asn,
+      fingerprintId: context.fingerprintId,
+      v63Decision: context.v63Decision,
+      // Public monitor observations remain excluded from the training dataset.
+      // Controlled M2.1 observations retain their pre-existing eligibility.
+      trainingEligible: context.datasetEligible === true,
+      nowIso,
+    });
+
+    if (context.asn) {
+      await rebuildAdaptiveReputation(db, {
+        scope: context.scope,
+        entityType: "asn",
+        entityId: context.asn,
+        nowMs,
+      });
+    }
+
+    if (context.fingerprintId) {
+      await rebuildAdaptiveReputation(db, {
+        scope: context.scope,
+        entityType: "fingerprint",
+        entityId: context.fingerprintId,
+        nowMs,
+      });
+    }
+
+    return {
+      learned: true,
+      label: "false_negative",
+      scope: context.scope,
+      trainingEligible: context.datasetEligible === true,
+    };
+  } catch (error) {
+    if (/unique|constraint/i.test(String(error?.message || error))) {
+      return { learned: false, reason: "feedback_already_exists" };
+    }
+    return {
+      learned: false,
+      reason: "learning_write_failed",
+      error: String(error?.message || error).slice(0, 120),
+    };
+  }
 }
 
 export async function deriveManualIpKey(secret, ip) {
@@ -136,6 +225,9 @@ export async function setManualIpBlocked(db, ipKey, eventId, nowMs = Date.now())
       )
       .bind(blockSid(ipKey), nowMs, nowMs + BLOCK_TTL_MS, nowMs)
       .run();
+
+    // Learning is best-effort and can never prevent the requested block.
+    await recordOperatorFalseNegative(db, eventId, nowMs);
     return true;
   } catch {
     return false;
