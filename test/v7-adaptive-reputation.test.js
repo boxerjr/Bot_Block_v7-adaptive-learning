@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   computeReputationFromFeedback,
+  decayStoredReputation,
   reputationRiskAdjustment,
   computeV7ShadowDecision,
 } from "../src/adaptive/reputation.js";
@@ -59,6 +60,22 @@ test("older feedback decays and fingerprint evidence decays faster than ASN evid
 
   assert.ok(asn.evidenceWeight > fp.evidenceWeight);
   assert.ok(asn.reputationScore < fp.reputationScore);
+});
+
+test("cached reputation keeps decaying toward neutral without new feedback", () => {
+  const fresh = computeReputationFromFeedback([row("bot_confirmed")], {
+    entityType: "asn",
+    nowMs: NOW,
+  });
+  const afterThirtyDays = decayStoredReputation(fresh, {
+    entityType: "asn",
+    nowMs: NOW + 30 * 86_400_000,
+    lastFeedbackAt: "2026-08-29T12:00:00.000Z",
+  });
+
+  assert.ok(afterThirtyDays.evidenceWeight < fresh.evidenceWeight);
+  assert.ok(afterThirtyDays.reputationScore > fresh.reputationScore);
+  assert.ok(afterThirtyDays.reputationScore < 50);
 });
 
 test("false positive and false negative carry stronger corrective weight", () => {
