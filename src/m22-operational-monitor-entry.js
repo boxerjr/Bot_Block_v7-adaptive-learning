@@ -16,6 +16,13 @@ function rateLimitPerMinute(env) {
   return Math.max(1, Math.min(120, Number(env.RATE_LIMIT_PER_MIN || 12) || 12));
 }
 
+function monitorPageRequest(request) {
+  const url = new URL(request.url);
+  url.pathname = "/check";
+  url.search = "";
+  return new Request(url.toString(), request);
+}
+
 function rebuildDecision(data = {}) {
   return {
     finalDecision: data.final_decision || "unknown",
@@ -73,6 +80,9 @@ async function operationalHealth(request, env, ctx) {
     {
       ...data,
       m22_operational_monitor: true,
+      m22_root_monitor_ready: true,
+      m22_root_monitor_path: "/",
+      m22_check_monitor_path: "/check",
       m22_policy_neutral_verdict_ready: true,
       m22_bot_classes: ["automation", "crawler"],
       m22_spoof_classes: ["spoofed_device"],
@@ -206,6 +216,9 @@ export default {
 
     if (url.pathname === "/_health") {
       return operationalHealth(request, env, ctx);
+    }
+    if (url.pathname === "/" || url.pathname === "") {
+      return operationalCheck(monitorPageRequest(request), env, ctx);
     }
     if (url.pathname === "/check" || url.pathname === "/check/") {
       return operationalCheck(request, env, ctx);
