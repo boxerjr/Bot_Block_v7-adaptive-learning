@@ -21,12 +21,17 @@ export function coarseUaFamily(ua = "") {
 }
 
 function verdictIcon(detection, v7, classification = "", policyNeutral = false) {
+  const cls = String(classification || "").toLowerCase();
+
   if (policyNeutral) {
-    if (detection === "block") return "🤖 BOT_SHADOW";
-    if (detection === "review") return "⚠️ REVIEW_SHADOW";
-    if (classification === "human_desktop") return "🖥️ HUMAN_DESKTOP";
+    if (cls === "automation" || cls === "crawler") return "🤖 BOT_SHADOW";
+    if (cls === "spoofed_device") return "🎭 SPOOF_SHADOW";
+    if (cls === "human_desktop") return "🖥️ HUMAN_DESKTOP";
+    if (cls === "human_mobile") return "👤 HUMAN_PASS";
+    if (detection === "review" || detection === "block") return "⚠️ REVIEW_SHADOW";
     return "👤 HUMAN_PASS";
   }
+
   if (detection === "block" || v7 === "block") return "🤖 BOT_SHADOW";
   if (detection === "review" || v7 === "review") return "⚠️ REVIEW_SHADOW";
   return "👤 HUMAN_PASS";
@@ -63,7 +68,7 @@ export function buildTelegramDecisionMessage({
   const monitorVerdict = decision.monitorVerdict || null;
   const policyNeutral = decision.decisionStage === "monitor_policy_neutral" || !!monitorVerdict;
   const title = verdictIcon(
-    decision.finalDecision,
+    monitorVerdict?.decision || decision.finalDecision,
     v7?.v7Decision,
     monitorVerdict?.classification || "",
     policyNeutral
@@ -89,6 +94,9 @@ export function buildTelegramDecisionMessage({
     lines.push(
       `MonitorDetection: ${clean(monitorVerdict.decision)} class=${clean(monitorVerdict.classification)} conf=${Number(monitorVerdict.confidence || 0)} risk=${Number(monitorVerdict.risk || 0)}`
     );
+    if (Array.isArray(monitorVerdict.reasons) && monitorVerdict.reasons.length) {
+      lines.push(`DetectionReasons: ${clean(monitorVerdict.reasons.join(", "), 360)}`);
+    }
   } else {
     lines.push(
       `MonitorDetection: ${clean(decision.finalDecision || "unknown")} stage=${clean(decision.decisionStage || "unknown")}`
@@ -111,7 +119,7 @@ export function buildTelegramDecisionMessage({
 
   if (ai2) {
     lines.push(
-      `AI2(V6.3): ${clean(ai2.verdict || "?")} class=${clean(ai2.classification || "?")} conf=${Number(ai2.classification_confidence || 0)} risk=${Number(ai2.risk_score || 0)}`
+      `AI2(V6.3): ${clean(ai2.verdict || "?")} class=${clean(ai2.classification || "?")} conf=${Number(ai2.classification_confidence || 0)} human=${Number(ai2.human_probability || 0)} bot=${Number(ai2.bot_probability || 0)} spoof=${Number(ai2.spoof_probability || 0)} risk=${Number(ai2.risk_score || 0)}`
     );
   } else {
     lines.push("AI2(V6.3): not-run");
