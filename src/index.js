@@ -4,6 +4,7 @@ import { buildEvent } from "./adaptive/events.js";
 import { insertEvent } from "./storage/d1.js";
 import { writeDatasetObject } from "./storage/dataset.js";
 import { evaluateV63EarlyRules } from "./compat/v63/preflight.js";
+import { scoreV63Signals } from "./compat/v63/score-signals.js";
 
 const VERSION = "V7.0_M1_SHADOW";
 const BASELINE = "V6.3_SILENT_AI";
@@ -36,6 +37,7 @@ export default {
         challenge_secret_bound: !!env.CHALLENGE_SECRET,
         shadow_storage_test_ready: true,
         v63_early_rules_ready: true,
+        v63_score_signals_ready: true,
         allowed_countries: [...csvSet(env.ALLOWED_COUNTRIES, "ES")],
         mobile_only: boolEnv(env.MOBILE_ONLY, true),
         humans_only: boolEnv(env.HUMANS_ONLY, true),
@@ -147,6 +149,65 @@ export default {
           asn: syntheticNetwork.asn,
           verified_bot: !!syntheticNetwork.bot?.verifiedBot,
           ua_present: testUa.length > 0,
+        },
+        result,
+      });
+    }
+
+    if (url.pathname === "/_shadow/v63-score") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "method_not_allowed" }, { status: 405 });
+      }
+
+      if (!adminAuthorized(request, env)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+
+      let body = {};
+      try {
+        body = await request.json();
+      } catch {
+        body = {};
+      }
+
+      const testUa =
+        typeof body.ua === "string"
+          ? body.ua
+          : request.headers.get("user-agent") || "";
+
+      const bodyBot = body.bot && typeof body.bot === "object" ? body.bot : {};
+      const syntheticNetwork = {
+        ...network,
+        country:
+          typeof body.country === "string" ? body.country : network.country,
+        asn: typeof body.asn === "string" ? body.asn : network.asn,
+        bot: {
+          ...(network.bot || {}),
+          ...bodyBot,
+        },
+      };
+
+      const telemetry =
+        body.telemetry && typeof body.telemetry === "object" ? body.telemetry : {};
+
+      const result = scoreV63Signals({
+        request,
+        env,
+        network: syntheticNetwork,
+        ua: testUa,
+        telemetry,
+      });
+
+      return Response.json({
+        status: "v63_score_signals_shadow",
+        version: VERSION,
+        baseline: BASELINE,
+        enforcing: false,
+        input_summary: {
+          country: syntheticNetwork.country,
+          asn: syntheticNetwork.asn,
+          ua_present: testUa.length > 0,
+          telemetry_present: Object.keys(telemetry).length > 0,
         },
         result,
       });
