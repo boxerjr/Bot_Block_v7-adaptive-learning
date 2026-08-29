@@ -6,6 +6,10 @@ const source = readFileSync(
   new URL("../src/m22-deep-monitor-entry-v2.js", import.meta.url),
   "utf8"
 );
+const operational = readFileSync(
+  new URL("../src/m22-operational-monitor-entry.js", import.meta.url),
+  "utf8"
+);
 const deepHelper = readFileSync(
   new URL("../src/adaptive/monitor-deep-inspection.js", import.meta.url),
   "utf8"
@@ -28,6 +32,16 @@ test("public monitor uses monitor-only deep inspection through policy gates", ()
   assert.match(deepHelper, /runV63AiPipeline/);
 });
 
+test("operational wrapper derives policy-neutral bot/spoof/human verdict", () => {
+  assert.match(operational, /deriveMonitorVerdict/);
+  assert.match(operational, /monitor_is_bot/);
+  assert.match(operational, /monitor_is_spoof/);
+  assert.match(operational, /monitor_final_decision/);
+  assert.match(operational, /m22_policy_neutral_verdict_ready/);
+  assert.match(operational, /TELEGRAM_TOKEN: undefined/);
+  assert.match(operational, /buildTelegramDecisionMessage/);
+});
+
 test("deep monitor remains non-enforcing and excluded from training", () => {
   assert.match(source, /dataset_eligible: false/);
   assert.match(source, /training_eligible: false/);
@@ -36,10 +50,13 @@ test("deep monitor remains non-enforcing and excluded from training", () => {
   assert.match(source, /raw_ip_stored: false/);
   assert.match(source, /user_agent_stored: false/);
   assert.match(source, /raw_telemetry_stored: false/);
+  assert.match(operational, /enforcing: false/);
+  assert.match(operational, /dataset_eligible: false/);
+  assert.match(operational, /training_eligible: false/);
 });
 
-test("wrangler routes preview through monitor deep inspection v2", () => {
-  assert.match(wrangler, /"main": "src\/m22-deep-monitor-entry-v2\.js"/);
+test("wrangler routes preview through operational public monitor", () => {
+  assert.match(wrangler, /"main": "src\/m22-operational-monitor-entry\.js"/);
   assert.match(wrangler, /"ALLOWED_COUNTRIES": "ES"/);
   assert.match(wrangler, /"MOBILE_ONLY": "true"/);
 });
