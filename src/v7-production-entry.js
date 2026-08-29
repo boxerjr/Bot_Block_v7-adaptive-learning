@@ -25,13 +25,16 @@ async function enrichHealth(request, env, ctx) {
       v7_release_mode: "production_redirect_ready",
       v7_redirect_requested: state.requested,
       v7_redirect_enabled: state.enabled,
+      v7_redirect_fully_configured: state.fullyConfigured,
       v7_origin_url_configured: state.originConfigured,
       v7_block_url_configured: state.blockConfigured,
-      v7_redirect_country_block: "BLOCK_URL",
-      v7_redirect_device_block: "BLOCK_URL",
-      v7_redirect_manual_ip_block: "BLOCK_URL",
+      v7_origin_redirect_enabled: state.originEnabled,
+      v7_block_redirect_enabled: state.blockEnabled,
+      v7_redirect_country_block: "BLOCK_URL_OR_404_FALLBACK",
+      v7_redirect_device_block: "BLOCK_URL_OR_404_FALLBACK",
+      v7_redirect_manual_ip_block: "BLOCK_URL_OR_404_FALLBACK",
       v7_redirect_human: "ORIGIN_URL",
-      v7_redirect_bot_spoof_review: "BLOCK_URL",
+      v7_redirect_bot_spoof_review: "BLOCK_URL_OR_404_FALLBACK",
       v7_redirect_loop_guard: true,
     },
     { status: response.status, headers: { "cache-control": "no-store" } }
@@ -68,9 +71,10 @@ async function injectRedirectClient(response) {
 async function handleMonitorPage(request, env, ctx) {
   const response = await policyWorker.fetch(request, env, ctx);
 
-  // Country, MOBILE_ONLY desktop, and exact-IP manual blocks currently return 404.
-  // Once both redirect targets are configured, convert only that block response
-  // into the configured BLOCK_URL redirect. Rate limits and other errors remain intact.
+  // Known policy/manual blocks return 404 in the lower layer. In production:
+  // - valid BLOCK_URL + REDIRECT_ENFORCING=true => 302 to BLOCK_URL
+  // - missing/invalid BLOCK_URL => preserve the 404 fallback
+  // Rate limits and non-404 errors remain untouched.
   if (response.status === 404) {
     const redirected = redirectResponse(request, env, "block");
     if (redirected) return redirected;
@@ -105,7 +109,7 @@ async function handleFinalSubmit(request, env, ctx) {
       redirect_reason: route.reason,
       redirect_url: route.url,
       v7_redirect_enforcing: route.enabled,
-      ai_bot_enforcing: route.enabled,
+      ai_bot_enforcing: route.enabled && route.action === "block",
       enforcing: route.enabled,
     },
     { status: response.status, headers: { "cache-control": "no-store" } }
