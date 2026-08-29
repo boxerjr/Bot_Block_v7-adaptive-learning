@@ -29,7 +29,9 @@
     "BLOCK_TTL_SECONDS": "1800",
     "PRESERVE_PATH": "false",
     "REDIRECT_ENFORCING": "true",
-    "OWNER_LEARNING_MODE": "false"
+    "OWNER_LEARNING_MODE": "false",
+    "ASN_HARD_BLOCK_ENABLED": "true",
+    "ASN_SPAMHAUS_DROP_ENABLED": "true"
   },
 
   "triggers": {
