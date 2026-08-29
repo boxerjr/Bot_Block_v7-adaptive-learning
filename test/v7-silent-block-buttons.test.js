@@ -30,17 +30,18 @@ test("production owns one final Telegram verdict and suppresses lower duplicate"
 });
 
 test("final Telegram control is event-bound for learning with direct exact-IP fallback", () => {
-  assert.match(production, /rememberEventIpKey/);
-  assert.match(production, /buildTelegramCallbackKeyboard/);
+  assert.match(production, /buildTelegramEventIpKeyCallbackKeyboard/);
   assert.match(production, /buildTelegramIpKeyCallbackKeyboard/);
   assert.match(production, /deriveManualIpKey\(env\.CHALLENGE_SECRET, clientIp\(request\)\)/);
   assert.match(production, /manual_ip_control_ready: telegram\.keyboardReady/);
+  assert.match(production, /manual_ip_control_event_bound: telegram\.eventBound/);
   assert.match(production, /v7_telegram_buttons_browser_independent: true/);
   assert.match(production, /operator feedback learning active/);
+  assert.doesNotMatch(production, /rememberEventIpKey/);
 });
 
 test("webhook self-healing is not used as a condition for attaching either keyboard", () => {
-  const eventKeyboardIndex = production.indexOf("keyboard = await buildTelegramCallbackKeyboard");
+  const eventKeyboardIndex = production.indexOf("keyboard = await buildTelegramEventIpKeyCallbackKeyboard");
   const fallbackKeyboardIndex = production.indexOf("keyboard = await buildTelegramIpKeyCallbackKeyboard");
   const webhookIndex = production.indexOf("const webhook = await ensureTelegramWebhook");
   assert.ok(eventKeyboardIndex >= 0);

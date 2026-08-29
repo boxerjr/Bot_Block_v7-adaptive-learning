@@ -8,11 +8,10 @@ import {
 import {
   deriveManualIpKey,
   isManualIpBlocked,
-  rememberEventIpKey,
   sendTelegramWithKeyboard,
 } from "./adaptive/manual-ip-block.js";
 import {
-  buildTelegramCallbackKeyboard,
+  buildTelegramEventIpKeyCallbackKeyboard,
   buildTelegramIpKeyCallbackKeyboard,
   ensureTelegramWebhook,
 } from "./adaptive/telegram-callback.js";
@@ -110,34 +109,34 @@ function rebuildPolicy(data = {}) {
 
 async function buildFinalTelegramControl(request, env, state = "unblocked", eventId = null) {
   if (!env?.DB || !env?.CHALLENGE_SECRET || !env?.TELEGRAM_TOKEN || !env?.TELEGRAM_CHAT_ID) {
-    return { keyboard: null, ipKey: null, webhookConfigured: false, eventMapped: false };
+    return { keyboard: null, ipKey: null, webhookConfigured: false, eventBound: false };
   }
 
   try {
     const ipKey = await deriveManualIpKey(env.CHALLENGE_SECRET, clientIp(request));
     if (!ipKey) {
-      return { keyboard: null, ipKey: null, webhookConfigured: false, eventMapped: false };
+      return { keyboard: null, ipKey: null, webhookConfigured: false, eventBound: false };
     }
 
     let keyboard = null;
-    let eventMapped = false;
+    let eventBound = false;
 
-    // Prefer an event-bound callback. It still resolves to the exact-IP HMAC,
-    // but now an explicit operator BLOCK can be learned as a false negative for
-    // this exact observation instead of an unrelated later request.
+    // Preferred production control: callback_data carries both a signed compact
+    // event reference and the signed exact-IP HMAC. No event->IP D1 mapping is
+    // required, so operator feedback remains learnable even if that mapping path
+    // is unavailable.
     if (eventId) {
-      eventMapped = await rememberEventIpKey(env.DB, eventId, ipKey);
-      if (eventMapped) {
-        keyboard = await buildTelegramCallbackKeyboard(
-          env.CHALLENGE_SECRET,
-          eventId,
-          state
-        );
-      }
+      keyboard = await buildTelegramEventIpKeyCallbackKeyboard(
+        env.CHALLENGE_SECRET,
+        eventId,
+        ipKey,
+        state
+      );
+      eventBound = !!keyboard;
     }
 
-    // Reliability fallback: if event mapping is unavailable, keep the existing
-    // direct exact-IP control. The block still works, but no event is guessed.
+    // Reliability fallback: exact-IP block/unblock still works even when an
+    // event cannot be represented. In that case no learning label is guessed.
     if (!keyboard) {
       keyboard = await buildTelegramIpKeyCallbackKeyboard(
         env.CHALLENGE_SECRET,
@@ -152,15 +151,15 @@ async function buildFinalTelegramControl(request, env, state = "unblocked", even
       webhookConfigured = webhook.configured === true;
     } catch {}
 
-    return { keyboard, ipKey, webhookConfigured, eventMapped };
+    return { keyboard, ipKey, webhookConfigured, eventBound };
   } catch {
-    return { keyboard: null, ipKey: null, webhookConfigured: false, eventMapped: false };
+    return { keyboard: null, ipKey: null, webhookConfigured: false, eventBound: false };
   }
 }
 
 async function sendFinalTelegram(request, env, ctx, data) {
   if (!env?.TELEGRAM_TOKEN || !env?.TELEGRAM_CHAT_ID) {
-    return { keyboardReady: false, webhookConfigured: false, eventMapped: false };
+    return { keyboardReady: false, webhookConfigured: false, eventBound: false };
   }
 
   const v63Decision = rebuildDecision(data);
@@ -211,7 +210,7 @@ async function sendFinalTelegram(request, env, ctx, data) {
     data.event_id || null
   );
   const manualLine = control.keyboard
-    ? control.eventMapped
+    ? control.eventBound
       ? "ManualIPControl: exact IP — operator feedback learning active"
       : "ManualIPControl: exact IP — Telegram callback BLOCK / UNBLOCK"
     : "ManualIPControl: unavailable";
@@ -228,7 +227,7 @@ async function sendFinalTelegram(request, env, ctx, data) {
   return {
     keyboardReady: !!control.keyboard,
     webhookConfigured: control.webhookConfigured,
-    eventMapped: control.eventMapped,
+    eventBound: control.eventBound,
   };
 }
 
@@ -261,6 +260,7 @@ async function enrichHealth(request, env, ctx) {
       v7_telegram_buttons_direct_exact_ip_hmac: true,
       v7_telegram_buttons_browser_independent: true,
       v7_operator_feedback_learning: true,
+      v7_operator_feedback_eventref_callback: true,
       v7_operator_block_allow_label: "false_negative",
       v7_operator_feedback_public_training_eligible: false,
       v7_redirect_country_block: "BLOCK_URL_OR_404_FALLBACK",
@@ -346,7 +346,8 @@ async function handleFinalSubmit(request, env, ctx) {
       telegram_configured: !!env.TELEGRAM_TOKEN && !!env.TELEGRAM_CHAT_ID,
       telegram_callback_webhook_configured: telegram.webhookConfigured,
       manual_ip_control_ready: telegram.keyboardReady,
-      manual_ip_control_event_mapped: telegram.eventMapped,
+      manual_ip_control_event_mapped: telegram.eventBound,
+      manual_ip_control_event_bound: telegram.eventBound,
       manual_ip_control_exact_ip: true,
       manual_ip_callback_opens_browser: false,
       redirect_enforcing: route.enabled,
