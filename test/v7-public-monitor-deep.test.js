@@ -14,6 +14,10 @@ const deepHelper = readFileSync(
   new URL("../src/adaptive/monitor-deep-inspection.js", import.meta.url),
   "utf8"
 );
+const rateLimit = readFileSync(
+  new URL("../src/adaptive/monitor-rate-limit.js", import.meta.url),
+  "utf8"
+);
 const wrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
 
 test("public monitor uses monitor-only deep inspection through policy gates", () => {
@@ -40,6 +44,16 @@ test("operational wrapper derives policy-neutral bot/spoof/human verdict", () =>
   assert.match(operational, /m22_policy_neutral_verdict_ready/);
   assert.match(operational, /TELEGRAM_TOKEN: undefined/);
   assert.match(operational, /buildTelegramDecisionMessage/);
+});
+
+test("public check has privacy-preserving anti-flood limiter", () => {
+  assert.match(operational, /checkMonitorRateLimit/);
+  assert.match(operational, /Too Many Monitor Requests/);
+  assert.match(operational, /m22_rate_limit_ready/);
+  assert.match(rateLimit, /HMAC/);
+  assert.match(rateLimit, /networkBucket/);
+  assert.match(rateLimit, /m22rl_/);
+  assert.doesNotMatch(rateLimit, /INSERT[^;]*raw_ip/i);
 });
 
 test("deep monitor remains non-enforcing and excluded from training", () => {
