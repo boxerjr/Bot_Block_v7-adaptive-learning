@@ -5,6 +5,11 @@ import { insertEvent } from "./storage/d1.js";
 import { writeDatasetObject } from "./storage/dataset.js";
 import { evaluateV63EarlyRules } from "./compat/v63/preflight.js";
 import { scoreV63Signals } from "./compat/v63/score-signals.js";
+import {
+  issueShadowBrowserToken,
+  verifyShadowBrowserToken,
+} from "./compat/v63/shadow-token.js";
+import { browserProbeHtml } from "./compat/v63/browser-probe.js";
 
 const VERSION = "V7.0_M1_SHADOW";
 const BASELINE = "V6.3_SILENT_AI";
@@ -25,6 +30,73 @@ function uaClaimSummary(ua = "") {
     mobile: ios || android || /mobile/i.test(value),
     android,
     ios,
+  };
+}
+
+function noStoreHtml(html, status = 200) {
+  return new Response(html, {
+    status,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store, no-cache, must-revalidate",
+      pragma: "no-cache",
+      "x-robots-tag": "noindex, nofollow",
+      "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+function telemetrySummary(telemetry, ua, score, source) {
+  return {
+    mode: "shadow",
+    baseline: BASELINE,
+    source,
+    dataset_eligible: false,
+    raw_ip_stored: false,
+    user_agent_stored: false,
+    raw_telemetry_stored: false,
+    critical: !!score.critical,
+    ua_claim: uaClaimSummary(ua),
+    telemetry_sections: {
+      navigator: !!telemetry.navigator,
+      ua_data: !!telemetry.uaData,
+      media: !!telemetry.media,
+      webgl: !!telemetry.webgl,
+      webgpu: !!telemetry.webgpu,
+      automation: !!telemetry.automation,
+      capabilities: !!telemetry.capabilities,
+      interaction: !!telemetry.interaction,
+    },
+  };
+}
+
+async function storeShadowObservation({ env, network, ua, telemetry, score, source, prefix }) {
+  const event = buildEvent({
+    network,
+    local: {
+      risk: score.risk,
+      spoofSignals: score.spoofSignals,
+      strongHardwareSpoof: score.strongHardwareSpoof,
+      reasons: score.reasons,
+    },
+    decision: "unknown",
+    finalReasons: ["shadow_only", "v63_local_score_only", source],
+    telemetrySummary: telemetrySummary(telemetry, ua, score, source),
+  });
+
+  const [d1Result, r2Result] = await Promise.allSettled([
+    insertEvent(env.DB, event),
+    writeDatasetObject(env.DATASET, event, { prefix }),
+  ]);
+
+  return {
+    event,
+    d1Result,
+    r2Result,
+    d1Written: d1Result.status === "fulfilled",
+    r2Written: r2Result.status === "fulfilled",
   };
 }
 
@@ -50,6 +122,7 @@ export default {
         v63_early_rules_ready: true,
         v63_score_signals_ready: true,
         v63_shadow_observation_ready: true,
+        v63_browser_probe_ready: true,
         allowed_countries: [...csvSet(env.ALLOWED_COUNTRIES, "ES")],
         mobile_only: boolEnv(env.MOBILE_ONLY, true),
         humans_only: boolEnv(env.HUMANS_ONLY, true),
@@ -124,8 +197,7 @@ export default {
 
       const syntheticNetwork = {
         ...network,
-        country:
-          typeof body.country === "string" ? body.country : network.country,
+        country: typeof body.country === "string" ? body.country : network.country,
         asn: typeof body.asn === "string" ? body.asn : network.asn,
         bot: {
           ...(network.bot || {}),
@@ -190,8 +262,7 @@ export default {
       const bodyBot = body.bot && typeof body.bot === "object" ? body.bot : {};
       const syntheticNetwork = {
         ...network,
-        country:
-          typeof body.country === "string" ? body.country : network.country,
+        country: typeof body.country === "string" ? body.country : network.country,
         asn: typeof body.asn === "string" ? body.asn : network.asn,
         bot: {
           ...(network.bot || {}),
@@ -248,8 +319,7 @@ export default {
       const bodyBot = body.bot && typeof body.bot === "object" ? body.bot : {};
       const syntheticNetwork = {
         ...network,
-        country:
-          typeof body.country === "string" ? body.country : network.country,
+        country: typeof body.country === "string" ? body.country : network.country,
         asn: typeof body.asn === "string" ? body.asn : network.asn,
         bot: {
           ...(network.bot || {}),
@@ -267,62 +337,30 @@ export default {
         telemetry,
       });
 
-      const event = buildEvent({
+      const stored = await storeShadowObservation({
+        env,
         network: syntheticNetwork,
-        local: {
-          risk: score.risk,
-          spoofSignals: score.spoofSignals,
-          strongHardwareSpoof: score.strongHardwareSpoof,
-          reasons: score.reasons,
-        },
-        decision: "unknown",
-        finalReasons: [
-          "shadow_only",
-          "v63_local_score_only",
-          "synthetic_admin_test",
-        ],
-        telemetrySummary: {
-          mode: "shadow",
-          baseline: BASELINE,
-          source: "admin_synthetic",
-          dataset_eligible: false,
-          raw_ip_stored: false,
-          user_agent_stored: false,
-          raw_telemetry_stored: false,
-          critical: !!score.critical,
-          ua_claim: uaClaimSummary(testUa),
-          telemetry_sections: {
-            navigator: !!telemetry.navigator,
-            ua_data: !!telemetry.uaData,
-            media: !!telemetry.media,
-            webgl: !!telemetry.webgl,
-            webgpu: !!telemetry.webgpu,
-            automation: !!telemetry.automation,
-          },
-        },
+        ua: testUa,
+        telemetry,
+        score,
+        source: "synthetic_admin_test",
+        prefix: "tests",
       });
-
-      const [d1Result, r2Result] = await Promise.allSettled([
-        insertEvent(env.DB, event),
-        writeDatasetObject(env.DATASET, event, { prefix: "tests" }),
-      ]);
-
-      const d1Written = d1Result.status === "fulfilled";
-      const r2Written = r2Result.status === "fulfilled";
 
       return Response.json(
         {
           status:
-            d1Written && r2Written
+            stored.d1Written && stored.r2Written
               ? "v63_shadow_observation_stored"
               : "v63_shadow_observation_partial",
           version: VERSION,
           baseline: BASELINE,
           enforcing: false,
-          event_id: event.event_id,
-          d1_written: d1Written,
-          r2_written: r2Written,
-          r2_key: r2Written ? r2Result.value : null,
+          event_id: stored.event.event_id,
+          d1_written: stored.d1Written,
+          r2_written: stored.r2Written,
+          r2_key:
+            stored.r2Result.status === "fulfilled" ? stored.r2Result.value : null,
           dataset_eligible: false,
           raw_ip_stored: false,
           user_agent_stored: false,
@@ -335,7 +373,121 @@ export default {
             reasons: score.reasons,
           },
         },
-        { status: d1Written && r2Written ? 201 : 500 }
+        { status: stored.d1Written && stored.r2Written ? 201 : 500 }
+      );
+    }
+
+    if (url.pathname === "/_shadow/browser-probe-session") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "method_not_allowed" }, { status: 405 });
+      }
+      if (!adminAuthorized(request, env)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      if (!env.CHALLENGE_SECRET) {
+        return Response.json({ error: "challenge_secret_missing" }, { status: 503 });
+      }
+
+      const token = await issueShadowBrowserToken(env.CHALLENGE_SECRET, 300000);
+      const probeUrl = `${url.origin}/_shadow/browser-probe?token=${encodeURIComponent(token)}`;
+
+      return Response.json({
+        status: "browser_probe_session_created",
+        version: VERSION,
+        enforcing: false,
+        expires_in_seconds: 300,
+        probe_url: probeUrl,
+        dataset_eligible: false,
+      });
+    }
+
+    if (url.pathname === "/_shadow/browser-probe") {
+      if (request.method !== "GET") {
+        return Response.json({ error: "method_not_allowed" }, { status: 405 });
+      }
+      if (!env.CHALLENGE_SECRET) {
+        return noStoreHtml("<!doctype html><p>Probe unavailable.</p>", 503);
+      }
+
+      const token = url.searchParams.get("token") || "";
+      const payload = await verifyShadowBrowserToken(env.CHALLENGE_SECRET, token);
+      if (!payload) {
+        return noStoreHtml("<!doctype html><p>Invalid or expired probe token.</p>", 401);
+      }
+
+      return noStoreHtml(browserProbeHtml(token));
+    }
+
+    if (url.pathname === "/_shadow/browser-probe-submit") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "method_not_allowed" }, { status: 405 });
+      }
+      if (!env.CHALLENGE_SECRET) {
+        return Response.json({ error: "challenge_secret_missing" }, { status: 503 });
+      }
+
+      const contentLength = Number(request.headers.get("content-length") || 0);
+      if (Number.isFinite(contentLength) && contentLength > 120000) {
+        return Response.json({ error: "payload_too_large" }, { status: 413 });
+      }
+
+      let body = {};
+      try {
+        body = await request.json();
+      } catch {
+        return Response.json({ error: "invalid_json" }, { status: 400 });
+      }
+
+      const payload = await verifyShadowBrowserToken(
+        env.CHALLENGE_SECRET,
+        body.token || ""
+      );
+      if (!payload) {
+        return Response.json({ error: "invalid_or_expired_probe_token" }, { status: 401 });
+      }
+
+      const telemetry =
+        body.telemetry && typeof body.telemetry === "object" ? body.telemetry : {};
+      const ua = request.headers.get("user-agent") || "";
+      const score = scoreV63Signals({ request, env, network, ua, telemetry });
+
+      const stored = await storeShadowObservation({
+        env,
+        network,
+        ua,
+        telemetry,
+        score,
+        source: "real_browser_admin_test",
+        prefix: "tests/browser",
+      });
+
+      return Response.json(
+        {
+          status:
+            stored.d1Written && stored.r2Written
+              ? "v63_real_browser_observation_stored"
+              : "v63_real_browser_observation_partial",
+          version: VERSION,
+          baseline: BASELINE,
+          enforcing: false,
+          event_id: stored.event.event_id,
+          d1_written: stored.d1Written,
+          r2_written: stored.r2Written,
+          r2_key:
+            stored.r2Result.status === "fulfilled" ? stored.r2Result.value : null,
+          dataset_eligible: false,
+          raw_ip_stored: false,
+          user_agent_stored: false,
+          raw_telemetry_stored: false,
+          result: {
+            risk: score.risk,
+            spoofSignals: score.spoofSignals,
+            strongHardwareSpoof: score.strongHardwareSpoof,
+            critical: score.critical,
+            reasons: score.reasons,
+          },
+        },
+        { status: stored.d1Written && stored.r2Written ? 201 : 500 }
       );
     }
 
