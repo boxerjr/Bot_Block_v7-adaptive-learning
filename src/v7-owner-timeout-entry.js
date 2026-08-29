@@ -6,6 +6,7 @@ import {
   processOwnerLearningTimeouts,
   scheduleOwnerConfirmation,
 } from "./adaptive/owner-learning-timeout.js";
+import { refreshSpamhausAsnDrop } from "./adaptive/asn-intelligence.js";
 
 function isMonitorSubmit(request) {
   try {
@@ -51,7 +52,11 @@ export default {
   },
 
   async scheduled(_controller, env, ctx) {
-    const task = processOwnerLearningTimeouts(env, Date.now());
+    const nowMs = Date.now();
+    const task = Promise.allSettled([
+      processOwnerLearningTimeouts(env, nowMs),
+      refreshSpamhausAsnDrop(env, nowMs),
+    ]);
     if (ctx?.waitUntil) ctx.waitUntil(task);
     else await task;
   },
