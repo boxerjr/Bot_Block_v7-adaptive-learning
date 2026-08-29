@@ -29,11 +29,19 @@ export function redirectState(env = {}) {
   const origin = parseTarget(env.ORIGIN_URL);
   const block = parseTarget(env.BLOCK_URL);
   const requested = boolEnv(env.REDIRECT_ENFORCING, false);
+  const originConfigured = !!origin;
+  const blockConfigured = !!block;
+  const originEnabled = requested && originConfigured;
+  const blockEnabled = requested && blockConfigured;
+
   return {
     requested,
-    originConfigured: !!origin,
-    blockConfigured: !!block,
-    enabled: requested && !!origin && !!block,
+    originConfigured,
+    blockConfigured,
+    originEnabled,
+    blockEnabled,
+    fullyConfigured: originConfigured && blockConfigured,
+    enabled: originEnabled || blockEnabled,
     originUrl: origin?.toString() || null,
     blockUrl: block?.toString() || null,
   };
@@ -41,9 +49,15 @@ export function redirectState(env = {}) {
 
 export function redirectResponse(request, env, action = "block") {
   const state = redirectState(env);
-  if (!state.enabled) return null;
-  const target = action === "origin" ? state.originUrl : state.blockUrl;
-  if (!target || sameOrigin(request.url, target)) return null;
+  const isOrigin = action === "origin";
+  const enabled = isOrigin ? state.originEnabled : state.blockEnabled;
+  const target = isOrigin ? state.originUrl : state.blockUrl;
+
+  // Fail-safe behavior is per destination:
+  // - configured target + REDIRECT_ENFORCING=true => redirect
+  // - missing/invalid target => caller keeps its normal fallback (404 for blocked traffic)
+  if (!enabled || !target || sameOrigin(request.url, target)) return null;
+
   return new Response(null, {
     status: 302,
     headers: {
@@ -57,10 +71,6 @@ export function redirectResponse(request, env, action = "block") {
 
 export function chooseFinalRedirect({ env = {}, requestUrl = "", monitorDetection = {}, v7Shadow = null } = {}) {
   const state = redirectState(env);
-  if (!state.enabled) {
-    return { enabled: false, action: "none", url: null, reason: "redirect_not_ready" };
-  }
-
   const classification = String(monitorDetection?.classification || "unknown").toLowerCase();
   const monitorDecision = String(monitorDetection?.final_decision || "unknown").toLowerCase();
   const v7Ready = v7Shadow?.ready === true;
@@ -80,9 +90,21 @@ export function chooseFinalRedirect({ env = {}, requestUrl = "", monitorDetectio
     reason = `verified_${classification}`;
   }
 
-  const url = action === "origin" ? state.originUrl : state.blockUrl;
-  if (!url || (requestUrl && sameOrigin(requestUrl, url))) {
-    return { enabled: false, action: "none", url: null, reason: "redirect_loop_guard" };
+  const isOrigin = action === "origin";
+  const enabled = isOrigin ? state.originEnabled : state.blockEnabled;
+  const url = isOrigin ? state.originUrl : state.blockUrl;
+
+  if (!enabled || !url) {
+    return {
+      enabled: false,
+      action,
+      url: null,
+      reason: isOrigin ? "origin_redirect_not_configured" : "block_redirect_not_configured",
+    };
+  }
+
+  if (requestUrl && sameOrigin(requestUrl, url)) {
+    return { enabled: false, action, url: null, reason: "redirect_loop_guard" };
   }
 
   return { enabled: true, action, url, reason };
