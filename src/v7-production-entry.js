@@ -8,9 +8,11 @@ import {
 import {
   deriveManualIpKey,
   isManualIpBlocked,
+  rememberEventIpKey,
   sendTelegramWithKeyboard,
 } from "./adaptive/manual-ip-block.js";
 import {
+  buildTelegramCallbackKeyboard,
   buildTelegramIpKeyCallbackKeyboard,
   ensureTelegramWebhook,
 } from "./adaptive/telegram-callback.js";
@@ -56,9 +58,6 @@ async function directExactIpBlock(request, env) {
     const ipKey = await deriveManualIpKey(env.CHALLENGE_SECRET, clientIp(request));
     if (!ipKey || !(await isManualIpBlocked(env.DB, ipKey))) return null;
 
-    // Already-blocked exact IPs never enter the browser probe/page. A configured
-    // BLOCK_URL receives a bodyless server-side redirect; otherwise 404 is the
-    // fail-safe fallback.
     return redirectResponse(request, env, "block") || blockFallbackResponse();
   } catch {
     return null;
@@ -109,40 +108,59 @@ function rebuildPolicy(data = {}) {
   };
 }
 
-async function buildFinalTelegramControl(request, env, state = "unblocked") {
+async function buildFinalTelegramControl(request, env, state = "unblocked", eventId = null) {
   if (!env?.DB || !env?.CHALLENGE_SECRET || !env?.TELEGRAM_TOKEN || !env?.TELEGRAM_CHAT_ID) {
-    return { keyboard: null, ipKey: null, webhookConfigured: false };
+    return { keyboard: null, ipKey: null, webhookConfigured: false, eventMapped: false };
   }
 
   try {
     const ipKey = await deriveManualIpKey(env.CHALLENGE_SECRET, clientIp(request));
-    if (!ipKey) return { keyboard: null, ipKey: null, webhookConfigured: false };
+    if (!ipKey) {
+      return { keyboard: null, ipKey: null, webhookConfigured: false, eventMapped: false };
+    }
 
-    const keyboard = await buildTelegramIpKeyCallbackKeyboard(
-      env.CHALLENGE_SECRET,
-      ipKey,
-      state
-    );
+    let keyboard = null;
+    let eventMapped = false;
 
-    // The keyboard is based directly on the signed exact-IP HMAC and therefore
-    // does not depend on event mapping or browser timing. Webhook verification
-    // remains self-healing, but a transient verification delay never removes
-    // the button from the Telegram message.
+    // Prefer an event-bound callback. It still resolves to the exact-IP HMAC,
+    // but now an explicit operator BLOCK can be learned as a false negative for
+    // this exact observation instead of an unrelated later request.
+    if (eventId) {
+      eventMapped = await rememberEventIpKey(env.DB, eventId, ipKey);
+      if (eventMapped) {
+        keyboard = await buildTelegramCallbackKeyboard(
+          env.CHALLENGE_SECRET,
+          eventId,
+          state
+        );
+      }
+    }
+
+    // Reliability fallback: if event mapping is unavailable, keep the existing
+    // direct exact-IP control. The block still works, but no event is guessed.
+    if (!keyboard) {
+      keyboard = await buildTelegramIpKeyCallbackKeyboard(
+        env.CHALLENGE_SECRET,
+        ipKey,
+        state
+      );
+    }
+
     let webhookConfigured = false;
     try {
       const webhook = await ensureTelegramWebhook(env, request.url);
       webhookConfigured = webhook.configured === true;
     } catch {}
 
-    return { keyboard, ipKey, webhookConfigured };
+    return { keyboard, ipKey, webhookConfigured, eventMapped };
   } catch {
-    return { keyboard: null, ipKey: null, webhookConfigured: false };
+    return { keyboard: null, ipKey: null, webhookConfigured: false, eventMapped: false };
   }
 }
 
 async function sendFinalTelegram(request, env, ctx, data) {
   if (!env?.TELEGRAM_TOKEN || !env?.TELEGRAM_CHAT_ID) {
-    return { keyboardReady: false, webhookConfigured: false };
+    return { keyboardReady: false, webhookConfigured: false, eventMapped: false };
   }
 
   const v63Decision = rebuildDecision(data);
@@ -189,10 +207,13 @@ async function sendFinalTelegram(request, env, ctx, data) {
   const control = await buildFinalTelegramControl(
     request,
     env,
-    alreadyBlocked ? "blocked" : "unblocked"
+    alreadyBlocked ? "blocked" : "unblocked",
+    data.event_id || null
   );
   const manualLine = control.keyboard
-    ? "ManualIPControl: exact IP — Telegram callback BLOCK / UNBLOCK"
+    ? control.eventMapped
+      ? "ManualIPControl: exact IP — operator feedback learning active"
+      : "ManualIPControl: exact IP — Telegram callback BLOCK / UNBLOCK"
     : "ManualIPControl: unavailable";
 
   waitUntil(
@@ -207,6 +228,7 @@ async function sendFinalTelegram(request, env, ctx, data) {
   return {
     keyboardReady: !!control.keyboard,
     webhookConfigured: control.webhookConfigured,
+    eventMapped: control.eventMapped,
   };
 }
 
@@ -238,6 +260,9 @@ async function enrichHealth(request, env, ctx) {
       v7_already_blocked_visible_page: false,
       v7_telegram_buttons_direct_exact_ip_hmac: true,
       v7_telegram_buttons_browser_independent: true,
+      v7_operator_feedback_learning: true,
+      v7_operator_block_allow_label: "false_negative",
+      v7_operator_feedback_public_training_eligible: false,
       v7_redirect_country_block: "BLOCK_URL_OR_404_FALLBACK",
       v7_redirect_device_block: "BLOCK_URL_OR_404_FALLBACK",
       v7_redirect_manual_ip_block: "BLOCK_URL_OR_404_FALLBACK",
@@ -283,9 +308,6 @@ async function injectRedirectClient(response, env) {
 async function handleMonitorPage(request, env, ctx) {
   const response = await policyWorker.fetch(request, env, ctx);
 
-  // Known policy/manual/rate-limit blocks return 404 in the lower layer.
-  // In production a valid BLOCK_URL converts that response to a bodyless
-  // server-side redirect; without BLOCK_URL the 404 remains the fail-safe.
   if (response.status === 404) {
     const redirected = redirectResponse(request, env, "block");
     if (redirected) return redirected;
@@ -295,8 +317,6 @@ async function handleMonitorPage(request, env, ctx) {
 }
 
 async function handleFinalSubmit(request, env, ctx) {
-  // Suppress the lower operational Telegram message. Production owns the final
-  // message so every browser gets the same direct exact-IP callback keyboard.
   const mutedEnv = {
     ...env,
     TELEGRAM_TOKEN: undefined,
@@ -326,6 +346,7 @@ async function handleFinalSubmit(request, env, ctx) {
       telegram_configured: !!env.TELEGRAM_TOKEN && !!env.TELEGRAM_CHAT_ID,
       telegram_callback_webhook_configured: telegram.webhookConfigured,
       manual_ip_control_ready: telegram.keyboardReady,
+      manual_ip_control_event_mapped: telegram.eventMapped,
       manual_ip_control_exact_ip: true,
       manual_ip_callback_opens_browser: false,
       redirect_enforcing: route.enabled,
