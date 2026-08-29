@@ -99,8 +99,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111;color:#eee;paddin
     } catch { return { present:!!navigator.userAgentData }; }
   }
 
-  // Exact V6.3 canvas-width font detection. Do not replace with
-  // document.fonts.check(): Safari font fallback can produce false positives.
+  // Exact V6.3 canvas-width font detection. Avoid fallback-prone font checks.
   function fontSignals() {
     try {
       const text = "mmmmmmmmmmlli";
