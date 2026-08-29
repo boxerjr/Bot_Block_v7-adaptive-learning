@@ -34,19 +34,19 @@
 
   "ai": {
     "binding": "AI"
-  }
+  },
 
-  /*
-  Add after creating the resources:
-
-  ,"d1_databases": [
+  "d1_databases": [
     {
       "binding": "DB",
       "database_name": "v7-adaptive-learning",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "cbc40c25-cb43-4bd1-bb7c-b7963b7425c7",
       "migrations_dir": "migrations"
     }
   ]
+
+  /*
+  Add after creating the R2 resource:
 
   ,"r2_buckets": [
     {
