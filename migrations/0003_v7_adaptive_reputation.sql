@@ -6,6 +6,7 @@
 -- - no raw IP or raw User-Agent columns exist here
 -- - fingerprint_id is a keyed pseudonymous identifier produced by the Worker
 -- - model/AI decisions are observations, not truth labels
+-- - free-text notes are automatically cleared to avoid accidental identifiers
 
 PRAGMA foreign_keys = ON;
 
@@ -38,6 +39,20 @@ CREATE INDEX IF NOT EXISTS idx_adaptive_feedback_scope_asn
   ON adaptive_feedback(scope, asn, created_at);
 CREATE INDEX IF NOT EXISTS idx_adaptive_feedback_scope_fp
   ON adaptive_feedback(scope, fingerprint_id, created_at);
+
+CREATE TRIGGER IF NOT EXISTS trg_adaptive_feedback_clear_notes_insert
+AFTER INSERT ON adaptive_feedback
+WHEN NEW.notes IS NOT NULL
+BEGIN
+  UPDATE adaptive_feedback SET notes = NULL WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_adaptive_feedback_clear_notes_update
+AFTER UPDATE OF notes ON adaptive_feedback
+WHEN NEW.notes IS NOT NULL
+BEGIN
+  UPDATE adaptive_feedback SET notes = NULL WHERE id = NEW.id;
+END;
 
 CREATE TABLE IF NOT EXISTS adaptive_asn_reputation (
   scope TEXT NOT NULL CHECK (scope IN ('test', 'live')),
