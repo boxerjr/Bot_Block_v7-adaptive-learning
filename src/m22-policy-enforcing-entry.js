@@ -22,7 +22,7 @@ function countryAllowed(env, country) {
 }
 
 function rateLimitPerMinute(env) {
-  return Math.max(1, Math.min(120, Number(env.RATE_LIMIT_PER_MIN || 12) || 12));
+  return Math.max(1, Math.min(120, Number(env.RATE_LIMIT_PER_MIN || 3) || 3));
 }
 
 function clean(value, max = 160) {
@@ -43,7 +43,7 @@ function buildDeviceBlockMessage(network = {}, gate = {}) {
     `Device: ${clean(gate.device || "desktop")}`,
     `Reason: ${clean(gate.reason || "desktop_not_allowed")}`,
     "Decision: block",
-    "Enforcement: HTTP 404",
+    "Enforcement: BLOCK_URL or 404 fallback",
     "DatasetEligible: false",
     "RawIP/UA stored: false",
   ].join("\n");
@@ -77,7 +77,7 @@ async function monitorPage(request, env, ctx) {
   const network = networkInfo(request);
 
   // Country policy is deliberately first. The operational worker owns the
-  // country-block Telegram message, rate limit, and 404 response.
+  // country-block Telegram message, exact-IP rate limit, and block response.
   if (!countryAllowed(env, network.country)) {
     return operationalWorker.fetch(request, env, ctx);
   }
