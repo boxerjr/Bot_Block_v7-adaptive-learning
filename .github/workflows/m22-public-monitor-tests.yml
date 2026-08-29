@@ -13,7 +13,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  v7-regression:
+    name: v7-regression
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
