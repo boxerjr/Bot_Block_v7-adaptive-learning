@@ -57,16 +57,25 @@ test("legacy Telegram URL keyboard remains available only for old messages", asy
   assert.doesNotMatch(serialized, /203\.0\.113\./);
 });
 
-test("operational monitor enforces only explicit manual exact-IP blocks", () => {
+test("operational monitor enforces explicit exact-IP blocks while AI remains non-enforcing", () => {
   assert.match(operational, /deriveManualIpKey/);
   assert.match(operational, /isManualIpBlocked/);
   assert.match(operational, /status: 404/);
   assert.match(operational, /manual_ip_block_enforcing: true/);
-  assert.match(operational, /automated_enforcing: false/);
+  assert.match(operational, /ai_bot_enforcing: false/);
   assert.match(operational, /manual_ip_raw_stored: false/);
   assert.match(operational, /_telegram\/webhook/);
   assert.match(operational, /Telegram callback BLOCK \/ UNBLOCK/);
   assert.match(operational, /manual_ip_callback_opens_browser: false/);
+});
+
+test("country policy precedes human bot monitor verdict and enforces 404", () => {
+  assert.match(operational, /countryAllowed/);
+  assert.match(operational, /BLOCK_BY_COUNTRY/);
+  assert.match(operational, /blocked_country/);
+  assert.match(operational, /country_policy_enforcing: true/);
+  assert.match(operational, /m22_country_policy_precedes_monitor_verdict: true/);
+  assert.match(operational, /m22_country_policy_block_status: 404/);
 });
 
 test("manual block persistence stores HMAC keys, never a raw-ip column", () => {
