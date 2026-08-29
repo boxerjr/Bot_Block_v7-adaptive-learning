@@ -20,9 +20,15 @@ export function coarseUaFamily(ua = "") {
   return "unknown";
 }
 
-function verdictIcon(detection, v7) {
+function verdictIcon(detection, v7, classification = "", policyNeutral = false) {
+  if (policyNeutral) {
+    if (detection === "block") return "🤖 BOT_SHADOW";
+    if (detection === "review") return "⚠️ REVIEW_SHADOW";
+    if (classification === "human_desktop") return "🖥️ HUMAN_DESKTOP";
+    return "👤 HUMAN_PASS";
+  }
   if (detection === "block" || v7 === "block") return "🤖 BOT_SHADOW";
-  if (v7 === "review") return "⚠️ REVIEW_SHADOW";
+  if (detection === "review" || v7 === "review") return "⚠️ REVIEW_SHADOW";
   return "👤 HUMAN_PASS";
 }
 
@@ -54,7 +60,14 @@ export function buildTelegramDecisionMessage({
 }) {
   const ai1 = decision.ai?.ai || null;
   const ai2 = decision.ai?.critic || null;
-  const title = verdictIcon(decision.finalDecision, v7?.v7Decision);
+  const monitorVerdict = decision.monitorVerdict || null;
+  const policyNeutral = decision.decisionStage === "monitor_policy_neutral" || !!monitorVerdict;
+  const title = verdictIcon(
+    decision.finalDecision,
+    v7?.v7Decision,
+    monitorVerdict?.classification || "",
+    policyNeutral
+  );
 
   const lines = [
     title,
@@ -72,8 +85,17 @@ export function buildTelegramDecisionMessage({
     );
   }
 
+  if (monitorVerdict) {
+    lines.push(
+      `MonitorDetection: ${clean(monitorVerdict.decision)} class=${clean(monitorVerdict.classification)} conf=${Number(monitorVerdict.confidence || 0)} risk=${Number(monitorVerdict.risk || 0)}`
+    );
+  } else {
+    lines.push(
+      `MonitorDetection: ${clean(decision.finalDecision || "unknown")} stage=${clean(decision.decisionStage || "unknown")}`
+    );
+  }
+
   lines.push(
-    `MonitorDetection: ${clean(decision.finalDecision || "unknown")} stage=${clean(decision.decisionStage || "unknown")}`,
     `LocalRisk: ${Number(decision.local?.risk || 0)}`,
     `SpoofSignals: ${Number(decision.local?.spoofSignals || 0)}`,
     `StrongHardwareSpoof: ${!!decision.local?.strongHardwareSpoof}`
@@ -81,25 +103,25 @@ export function buildTelegramDecisionMessage({
 
   if (ai1) {
     lines.push(
-      `AI1: ${clean(ai1.verdict || "?")} class=${clean(ai1.classification || "?")} conf=${Number(ai1.classification_confidence || 0)} human=${Number(ai1.human_probability || 0)} bot=${Number(ai1.bot_probability || 0)} spoof=${Number(ai1.spoof_probability || 0)} risk=${Number(ai1.risk_score || 0)}`
+      `AI1(V6.3): ${clean(ai1.verdict || "?")} class=${clean(ai1.classification || "?")} conf=${Number(ai1.classification_confidence || 0)} human=${Number(ai1.human_probability || 0)} bot=${Number(ai1.bot_probability || 0)} spoof=${Number(ai1.spoof_probability || 0)} risk=${Number(ai1.risk_score || 0)}`
     );
   } else {
-    lines.push("AI1: not-run");
+    lines.push("AI1(V6.3): not-run");
   }
 
   if (ai2) {
     lines.push(
-      `AI2: ${clean(ai2.verdict || "?")} class=${clean(ai2.classification || "?")} conf=${Number(ai2.classification_confidence || 0)} risk=${Number(ai2.risk_score || 0)}`
+      `AI2(V6.3): ${clean(ai2.verdict || "?")} class=${clean(ai2.classification || "?")} conf=${Number(ai2.classification_confidence || 0)} risk=${Number(ai2.risk_score || 0)}`
     );
   } else {
-    lines.push("AI2: not-run");
+    lines.push("AI2(V6.3): not-run");
   }
 
-  lines.push(`HumanEvidence: ${Number(decision.ai?.humanEvidence || 0)}`);
+  lines.push(`HumanEvidence(V6.3): ${Number(decision.ai?.humanEvidence || 0)}`);
 
   if (v7) {
     lines.push(
-      `V7: ${clean(v7.v7Decision || "unknown")} risk=${Number(v7.v7Risk || 0)} base=${Number(v7.baseRisk || 0)} asnAdj=${Number(v7.asnAdjustment || 0)} fpAdj=${Number(v7.fingerprintAdjustment || 0)} comparison=${clean(v7.comparison || "?")}`
+      `V7Compat: ${clean(v7.v7Decision || "unknown")} risk=${Number(v7.v7Risk || 0)} base=${Number(v7.baseRisk || 0)} asnAdj=${Number(v7.asnAdjustment || 0)} fpAdj=${Number(v7.fingerprintAdjustment || 0)} comparison=${clean(v7.comparison || "?")}`
     );
   }
 
