@@ -17,6 +17,17 @@ function adminAuthorized(request, env) {
   return !!env.ADMIN_SECRET && supplied === env.ADMIN_SECRET;
 }
 
+function uaClaimSummary(ua = "") {
+  const value = String(ua);
+  const ios = /(iphone|ipad|ipod)/i.test(value);
+  const android = /android/i.test(value);
+  return {
+    mobile: ios || android || /mobile/i.test(value),
+    android,
+    ios,
+  };
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -38,6 +49,7 @@ export default {
         shadow_storage_test_ready: true,
         v63_early_rules_ready: true,
         v63_score_signals_ready: true,
+        v63_shadow_observation_ready: true,
         allowed_countries: [...csvSet(env.ALLOWED_COUNTRIES, "ES")],
         mobile_only: boolEnv(env.MOBILE_ONLY, true),
         humans_only: boolEnv(env.HUMANS_ONLY, true),
@@ -211,6 +223,120 @@ export default {
         },
         result,
       });
+    }
+
+    if (url.pathname === "/_shadow/v63-observe") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "method_not_allowed" }, { status: 405 });
+      }
+
+      if (!adminAuthorized(request, env)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+
+      let body = {};
+      try {
+        body = await request.json();
+      } catch {
+        body = {};
+      }
+
+      const testUa =
+        typeof body.ua === "string"
+          ? body.ua
+          : request.headers.get("user-agent") || "";
+      const bodyBot = body.bot && typeof body.bot === "object" ? body.bot : {};
+      const syntheticNetwork = {
+        ...network,
+        country:
+          typeof body.country === "string" ? body.country : network.country,
+        asn: typeof body.asn === "string" ? body.asn : network.asn,
+        bot: {
+          ...(network.bot || {}),
+          ...bodyBot,
+        },
+      };
+      const telemetry =
+        body.telemetry && typeof body.telemetry === "object" ? body.telemetry : {};
+
+      const score = scoreV63Signals({
+        request,
+        env,
+        network: syntheticNetwork,
+        ua: testUa,
+        telemetry,
+      });
+
+      const event = buildEvent({
+        network: syntheticNetwork,
+        local: {
+          risk: score.risk,
+          spoofSignals: score.spoofSignals,
+          strongHardwareSpoof: score.strongHardwareSpoof,
+          reasons: score.reasons,
+        },
+        decision: "unknown",
+        finalReasons: [
+          "shadow_only",
+          "v63_local_score_only",
+          "synthetic_admin_test",
+        ],
+        telemetrySummary: {
+          mode: "shadow",
+          baseline: BASELINE,
+          source: "admin_synthetic",
+          dataset_eligible: false,
+          raw_ip_stored: false,
+          user_agent_stored: false,
+          raw_telemetry_stored: false,
+          critical: !!score.critical,
+          ua_claim: uaClaimSummary(testUa),
+          telemetry_sections: {
+            navigator: !!telemetry.navigator,
+            ua_data: !!telemetry.uaData,
+            media: !!telemetry.media,
+            webgl: !!telemetry.webgl,
+            webgpu: !!telemetry.webgpu,
+            automation: !!telemetry.automation,
+          },
+        },
+      });
+
+      const [d1Result, r2Result] = await Promise.allSettled([
+        insertEvent(env.DB, event),
+        writeDatasetObject(env.DATASET, event, { prefix: "tests" }),
+      ]);
+
+      const d1Written = d1Result.status === "fulfilled";
+      const r2Written = r2Result.status === "fulfilled";
+
+      return Response.json(
+        {
+          status:
+            d1Written && r2Written
+              ? "v63_shadow_observation_stored"
+              : "v63_shadow_observation_partial",
+          version: VERSION,
+          baseline: BASELINE,
+          enforcing: false,
+          event_id: event.event_id,
+          d1_written: d1Written,
+          r2_written: r2Written,
+          r2_key: r2Written ? r2Result.value : null,
+          dataset_eligible: false,
+          raw_ip_stored: false,
+          user_agent_stored: false,
+          raw_telemetry_stored: false,
+          result: {
+            risk: score.risk,
+            spoofSignals: score.spoofSignals,
+            strongHardwareSpoof: score.strongHardwareSpoof,
+            critical: score.critical,
+            reasons: score.reasons,
+          },
+        },
+        { status: d1Written && r2Written ? 201 : 500 }
+      );
     }
 
     return Response.json(
