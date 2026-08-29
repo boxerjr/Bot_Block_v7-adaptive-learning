@@ -4,6 +4,7 @@ import { evaluateV63MobileGate } from "../compat/v63/device.js";
 import { fingerprintV63Reputation } from "../compat/v63/fingerprint.js";
 import { scoreV63Signals } from "../compat/v63/score-signals.js";
 import { buildV63AiFeatures, runV63AiPipeline } from "../compat/v63/ai.js";
+import { classifyOrganization } from "./org-intelligence.js";
 import { deriveMonitorVerdict } from "./monitor-verdict.js";
 
 function clamp(value, min = 0, max = 100) {
@@ -71,6 +72,7 @@ export async function runMonitorDeepInspection({
         }
       : null;
 
+  const orgIntelligence = classifyOrganization(network.org);
   const localBase = scoreV63Signals({ request, env, network, ua, telemetry });
 
   let fingerprint;
@@ -86,12 +88,21 @@ export async function runMonitorDeepInspection({
     fingerprint = emptyFingerprint("fingerprint_state_error");
   }
 
+  const orgReasons = orgIntelligence.riskDelta > 0
+    ? [`org_${orgIntelligence.class}:${orgIntelligence.matchedRule}`]
+    : [];
+
   const local = {
     ...localBase,
-    risk: clamp((localBase.risk || 0) + (fingerprint.risk || 0)),
+    risk: clamp(
+      (localBase.risk || 0) +
+      (fingerprint.risk || 0) +
+      Number(orgIntelligence.riskDelta || 0)
+    ),
     reasons: [
       ...(Array.isArray(localBase.reasons) ? localBase.reasons : []),
       ...(Array.isArray(fingerprint.reasons) ? fingerprint.reasons : []),
+      ...orgReasons,
     ],
   };
 
@@ -104,6 +115,18 @@ export async function runMonitorDeepInspection({
     local,
     fingerprint,
   });
+
+  // This profile is derived server-side from Cloudflare's asOrganization value,
+  // not from browser telemetry. It gives Workers AI a normalized network prior
+  // while preserving the rule that no single network attribute proves human/bot.
+  features.network.organization_profile = {
+    class: orgIntelligence.class,
+    confidence: orgIntelligence.confidence,
+    risk_delta: orgIntelligence.riskDelta,
+    matched_rule: orgIntelligence.matchedRule,
+    reason: orgIntelligence.reason,
+    source: orgIntelligence.source,
+  };
 
   const ai = await runV63AiPipeline({ env, features, local });
 
@@ -129,6 +152,7 @@ export async function runMonitorDeepInspection({
     local,
     fingerprint,
     ai,
+    orgIntelligence,
   };
 
   const monitorVerdict = deriveMonitorVerdict(provisional);
@@ -149,6 +173,7 @@ export async function runMonitorDeepInspection({
     local,
     fingerprint,
     ai,
+    orgIntelligence,
     policyBaseline,
     v63Detection,
     monitorVerdict,
