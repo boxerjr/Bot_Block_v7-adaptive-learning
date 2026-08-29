@@ -1,9 +1,14 @@
 import {
   clearManualIpBlocked,
   getEventIpKey,
+  recordOperatorFalseNegative,
   setManualIpBlocked,
 } from "./manual-ip-block.js";
 import { clearMonitorRateLimitForIpKey } from "./monitor-rate-limit.js";
+import {
+  ownerLearningEnabled,
+  recordOwnerHumanConfirmed,
+} from "./owner-learning.js";
 
 function bytesToB64url(bytes) {
   let binary = "";
@@ -57,6 +62,22 @@ function validEventRef(eventRef) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}$/.test(String(eventRef || "").toLowerCase());
 }
 
+function eventActionCode(action) {
+  if (action === "block") return "b";
+  if (action === "unblock") return "u";
+  if (action === "owner_yes") return "y";
+  if (action === "owner_no") return "n";
+  return null;
+}
+
+function eventActionFromCode(code) {
+  if (code === "b") return "block";
+  if (code === "u") return "unblock";
+  if (code === "y") return "owner_yes";
+  if (code === "n") return "owner_no";
+  return null;
+}
+
 async function telegramApi(env, method, payload) {
   if (!env?.TELEGRAM_TOKEN) return { ok: false, reason: "telegram_not_bound" };
   try {
@@ -90,10 +111,10 @@ async function ipKeyCallbackData(secret, ipKey, action) {
 }
 
 async function eventIpKeyCallbackData(secret, eventId, ipKey, action) {
-  const code = action === "block" ? "b" : "u";
+  const code = eventActionCode(action);
   const ref = compactEventRef(eventId);
   const key = String(ipKey || "");
-  if (!ref || !validIpKey(key)) return null;
+  if (!code || !ref || !validIpKey(key)) return null;
   const keyPart = key.slice("m22ip_".length);
   // 63 bytes total: within Telegram's 64-byte callback_data limit.
   const sig = await hmacShort(
@@ -109,7 +130,7 @@ export async function parseTelegramIpCallback(secret, data) {
   if (!secret) return null;
 
   const eventBound = value.match(
-    /^m22e:([bu]):([0-9a-fA-F]{8}-[0-9a-fA-F]{4}):([A-Za-z0-9_-]{32}):([A-Za-z0-9_-]{9})$/
+    /^m22e:([buyn]):([0-9a-fA-F]{8}-[0-9a-fA-F]{4}):([A-Za-z0-9_-]{32}):([A-Za-z0-9_-]{9})$/
   );
   if (eventBound) {
     const [, code, rawRef, keyPart, supplied] = eventBound;
@@ -122,7 +143,7 @@ export async function parseTelegramIpCallback(secret, data) {
     );
     if (!safeEqual(supplied, expected)) return null;
     return {
-      action: code === "b" ? "block" : "unblock",
+      action: eventActionFromCode(code),
       ipKey,
       eventRef,
     };
@@ -193,6 +214,19 @@ export async function buildTelegramEventIpKeyCallbackKeyboard(
         text: state === "blocked" ? "🔓 UNBLOCK IP" : "🚫 BLOCK IP",
         callback_data: callbackDataValue,
       },
+    ]],
+  };
+}
+
+export async function buildTelegramOwnerLearningKeyboard(secret, eventId, ipKey) {
+  if (!secret || !compactEventRef(eventId) || !validIpKey(ipKey)) return null;
+  const yes = await eventIpKeyCallbackData(secret, eventId, ipKey, "owner_yes");
+  const no = await eventIpKeyCallbackData(secret, eventId, ipKey, "owner_no");
+  if (!yes || !no) return null;
+  return {
+    inline_keyboard: [[
+      { text: "✅ IT'S ME", callback_data: yes },
+      { text: "❌ NOT ME", callback_data: no },
     ]],
   };
 }
@@ -367,6 +401,100 @@ async function answerCallback(env, callbackId, text, showAlert = false) {
   });
 }
 
+async function removeCallbackKeyboard(env, cb) {
+  if (!cb?.message?.message_id) return;
+  await telegramApi(env, "editMessageReplyMarkup", {
+    chat_id: String(env.TELEGRAM_CHAT_ID),
+    message_id: cb.message.message_id,
+    reply_markup: { inline_keyboard: [] },
+  });
+}
+
+async function handleOwnerLearningAction(env, cb, parsed, eventId, ipKey) {
+  if (!ownerLearningEnabled(env)) {
+    await answerCallback(env, cb.id, "Owner learning mode is OFF", true);
+    return new Response("OK", { status: 200 });
+  }
+  if (!eventId) {
+    await answerCallback(env, cb.id, "Learning event is unavailable", true);
+    return new Response("OK", { status: 200 });
+  }
+
+  if (parsed.action === "owner_yes") {
+    const learning = await recordOwnerHumanConfirmed(env.DB, eventId);
+    const alreadyConfirmed =
+      learning.reason === "feedback_already_exists" && learning.label === "human_confirmed";
+
+    if (!learning.learned && !alreadyConfirmed) {
+      const detail = learning.label
+        ? `Existing label: ${learning.label}`
+        : `Learning failed: ${learning.reason || "unknown"}`;
+      await answerCallback(env, cb.id, detail, true);
+      return new Response("OK", { status: 200 });
+    }
+
+    await answerCallback(
+      env,
+      cb.id,
+      alreadyConfirmed ? "✅ Already confirmed as human" : "✅ HUMAN CONFIRMED — V7 learned",
+      true
+    );
+    await telegramApi(env, "sendMessage", {
+      chat_id: String(env.TELEGRAM_CHAT_ID),
+      text: alreadyConfirmed
+        ? "✅ HUMAN ALREADY CONFIRMED\nOperatorLearning: human_confirmed\nRaw IP stored: false"
+        : `✅ HUMAN CONFIRMED\nOperatorLearning: human_confirmed\nTrainingEligible: ${learning.trainingEligible === true}\nRaw IP stored: false`,
+      disable_web_page_preview: true,
+    });
+    await removeCallbackKeyboard(env, cb);
+    return new Response("OK", { status: 200 });
+  }
+
+  // NOT ME means this HUMAN_PASS was a false negative. Learn the exact event
+  // first, then block the exact-IP operationally. The block remains authoritative
+  // even if feedback already existed or the learning write fails.
+  const learning = await recordOperatorFalseNegative(env.DB, eventId);
+  const success = await setManualIpBlocked(env.DB, ipKey, "telegram_owner_not_me");
+  if (!success) {
+    await answerCallback(env, cb.id, "IP block failed — try again", true);
+    return new Response("OK", { status: 200 });
+  }
+
+  const learned = learning.learned === true;
+  await answerCallback(
+    env,
+    cb.id,
+    learned ? "✅ NOT ME — blocked and learned" : "✅ NOT ME — IP blocked",
+    true
+  );
+  await telegramApi(env, "sendMessage", {
+    chat_id: String(env.TELEGRAM_CHAT_ID),
+    text: `✅ NOT ME CONFIRMED\nIP: BLOCKED (exact IP only)\nOperatorLearning: ${learned ? "false_negative" : learning.reason || "not-written"}\nRaw IP stored: false`,
+    disable_web_page_preview: true,
+  });
+
+  const nextKeyboard = await buildTelegramEventIpKeyCallbackKeyboard(
+    env.CHALLENGE_SECRET,
+    eventId,
+    ipKey,
+    "blocked"
+  ) || await buildTelegramIpKeyCallbackKeyboard(
+    env.CHALLENGE_SECRET,
+    ipKey,
+    "blocked"
+  );
+
+  if (cb?.message?.message_id && nextKeyboard) {
+    await telegramApi(env, "editMessageReplyMarkup", {
+      chat_id: String(env.TELEGRAM_CHAT_ID),
+      message_id: cb.message.message_id,
+      reply_markup: nextKeyboard,
+    });
+  }
+
+  return new Response("OK", { status: 200 });
+}
+
 export async function handleTelegramCallbackWebhook(request, env) {
   if (request.method !== "POST") {
     return new Response("Method Not Allowed", { status: 405 });
@@ -407,6 +535,10 @@ export async function handleTelegramCallbackWebhook(request, env) {
   if (!ipKey) {
     await answerCallback(env, cb.id, "Exact-IP mapping is unavailable", true);
     return new Response("OK", { status: 200 });
+  }
+
+  if (parsed.action === "owner_yes" || parsed.action === "owner_no") {
+    return handleOwnerLearningAction(env, cb, parsed, eventId, ipKey);
   }
 
   let success = false;
