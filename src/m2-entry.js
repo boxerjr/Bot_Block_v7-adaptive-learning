@@ -4,6 +4,7 @@ import { deriveAdaptiveFingerprintId } from "./adaptive/fingerprint-id.js";
 import {
   ADAPTIVE_LABELS,
   computeV7ShadowDecision,
+  decayStoredReputation,
 } from "./adaptive/reputation.js";
 import {
   adaptiveSchemaReady,
@@ -42,6 +43,30 @@ function compactReputation(rep, idName) {
   };
 }
 
+function applyReadDecay(reputations, nowMs = Date.now()) {
+  const asnDecay = decayStoredReputation(reputations?.asn, {
+    entityType: "asn",
+    nowMs,
+    lastFeedbackAt: reputations?.asn?.lastFeedbackAt || null,
+  });
+  const fpDecay = decayStoredReputation(reputations?.fingerprint, {
+    entityType: "fingerprint",
+    nowMs,
+    lastFeedbackAt: reputations?.fingerprint?.lastFeedbackAt || null,
+  });
+
+  return {
+    asn: {
+      ...(reputations?.asn || {}),
+      ...asnDecay,
+    },
+    fingerprint: {
+      ...(reputations?.fingerprint || {}),
+      ...fpDecay,
+    },
+  };
+}
+
 async function healthWithM2(request, env, ctx) {
   const response = await m1Worker.fetch(request, env, ctx);
   let data;
@@ -63,6 +88,10 @@ async function healthWithM2(request, env, ctx) {
       v7_shadow_comparison_ready: schemaReady,
       adaptive_reputation_scope_isolation: ["test", "live"],
       adaptive_training_from_ai_decisions: false,
+      adaptive_decay: {
+        asn_half_life_days: 30,
+        fingerprint_half_life_days: 14,
+      },
     },
     {
       status: response.status,
@@ -130,7 +159,8 @@ async function handleAdaptiveBrowserSubmit(request, env, ctx) {
       env.CHALLENGE_SECRET,
       { ua, telemetry }
     );
-    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
 
     await recordAdaptiveObservationEntities(env.DB, {
       scope,
@@ -139,11 +169,12 @@ async function handleAdaptiveBrowserSubmit(request, env, ctx) {
       nowIso,
     });
 
-    const reputations = await getAdaptiveReputations(env.DB, {
+    const storedReputations = await getAdaptiveReputations(env.DB, {
       scope,
       asn: network.asn || null,
       fingerprintId,
     });
+    const reputations = applyReadDecay(storedReputations, nowMs);
 
     const v7 = computeV7ShadowDecision({
       v63Decision: m1Data.final_decision || "unknown",
@@ -364,11 +395,12 @@ async function handleReputationLookup(request, env) {
   const context = await getAdaptiveEventContext(env.DB, eventId);
   if (!context) return Response.json({ error: "event_not_found" }, { status: 404 });
 
-  const reputations = await getAdaptiveReputations(env.DB, {
+  const storedReputations = await getAdaptiveReputations(env.DB, {
     scope: context.scope,
     asn: context.asn,
     fingerprintId: context.fingerprintId,
   });
+  const reputations = applyReadDecay(storedReputations);
   const feedback = await getAdaptiveFeedbackForEvent(env.DB, eventId);
 
   return Response.json({
