@@ -1,9 +1,9 @@
 {
   "name": "v7-adaptive-learning",
-  "version": "7.0.0-dev.1",
+  "version": "7.0.0",
   "private": true,
   "type": "module",
-  "description": "Adaptive AI anti-bot system for Cloudflare Workers",
+  "description": "Adaptive AI anti-bot and traffic policy system for Cloudflare Workers",
   "scripts": {
     "test": "node --test",
     "dev": "wrangler dev",
