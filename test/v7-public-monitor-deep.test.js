@@ -46,6 +46,14 @@ test("operational wrapper derives policy-neutral bot/spoof/human verdict", () =>
   assert.match(operational, /buildTelegramDecisionMessage/);
 });
 
+test("root path is rewritten into the operational monitor page", () => {
+  assert.match(operational, /function monitorPageRequest/);
+  assert.match(operational, /url\.pathname = "\/check"/);
+  assert.match(operational, /url\.pathname === "\/"/);
+  assert.match(operational, /operationalCheck\(monitorPageRequest\(request\), env, ctx\)/);
+  assert.match(operational, /m22_root_monitor_ready: true/);
+});
+
 test("public check has privacy-preserving anti-flood limiter", () => {
   assert.match(operational, /checkMonitorRateLimit/);
   assert.match(operational, /Too Many Monitor Requests/);
