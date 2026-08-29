@@ -1,3 +1,5 @@
+import { classifyOrganization } from "./org-intelligence.js";
+
 function clean(value, max = 180) {
   return String(value ?? "")
     .replace(/[\r\n\t]+/g, " ")
@@ -37,6 +39,11 @@ function verdictIcon(detection, v7, classification = "", policyNeutral = false) 
   return "👤 HUMAN_PASS";
 }
 
+function orgIntelLine(network = {}) {
+  const intel = classifyOrganization(network.org);
+  return `OrgIntel: ${clean(intel.class)} conf=${Number(intel.confidence || 0)} riskDelta=${Number(intel.riskDelta || 0)} rule=${clean(intel.matchedRule || "none")}`;
+}
+
 export function buildTelegramHitMessage({ sessionId, network = {}, early = {}, uaFamily = "unknown" }) {
   const earlyState = early?.outcome === "block"
     ? `would_block:${clean(early.reason || early.stage)}`
@@ -48,6 +55,7 @@ export function buildTelegramHitMessage({ sessionId, network = {}, early = {}, u
     `Country: ${clean(network.country || "?")}`,
     `ASN: ${clean(network.asn || "?")}`,
     `Org: ${clean(network.org || "?")}`,
+    orgIntelLine(network),
     `UAFamily: ${clean(uaFamily)}`,
     `EarlyPolicy: ${earlyState}`,
     "Mode: shadow / deep inspection / no enforcement / no training",
@@ -80,6 +88,7 @@ export function buildTelegramDecisionMessage({
     `Country: ${clean(network.country || "?")}`,
     `ASN: ${clean(network.asn || "?")}`,
     `Org: ${clean(network.org || "?")}`,
+    orgIntelLine(network),
   ];
 
   if (policyBaseline) {
