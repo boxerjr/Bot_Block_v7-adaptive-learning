@@ -99,11 +99,38 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111;color:#eee;paddin
     } catch { return { present:!!navigator.userAgentData }; }
   }
 
+  // Exact V6.3 canvas-width font detection. Do not replace with
+  // document.fonts.check(): Safari font fallback can produce false positives.
   function fontSignals() {
     try {
-      if (!document.fonts?.check) return [];
-      return ["Segoe UI","Calibri","Consolas","Cambria","Helvetica Neue","San Francisco","Roboto"]
-        .filter(font => document.fonts.check('12px "' + font + '"'));
+      const text = "mmmmmmmmmmlli";
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return [];
+
+      const bases = ["monospace", "sans-serif", "serif"];
+      const wanted = ["Segoe UI", "Calibri", "Cambria", "Consolas", "Arial", "Helvetica Neue"];
+      const baseline = {};
+
+      for (const base of bases) {
+        ctx.font = "72px " + base;
+        baseline[base] = ctx.measureText(text).width;
+      }
+
+      const result = [];
+      for (const font of wanted) {
+        let present = false;
+        for (const base of bases) {
+          ctx.font = '72px "' + font + '",' + base;
+          if (Math.abs(ctx.measureText(text).width - baseline[base]) > 0.01) {
+            present = true;
+            break;
+          }
+        }
+        if (present) result.push(font);
+      }
+
+      return result;
     } catch { return []; }
   }
 
