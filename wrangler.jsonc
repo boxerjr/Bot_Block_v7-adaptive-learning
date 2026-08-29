@@ -31,7 +31,8 @@
     "REDIRECT_ENFORCING": "true",
     "OWNER_LEARNING_MODE": "false",
     "ASN_HARD_BLOCK_ENABLED": "true",
-    "ASN_SPAMHAUS_DROP_ENABLED": "true"
+    "ASN_SPAMHAUS_DROP_ENABLED": "true",
+    "ORG_INFRASTRUCTURE_HARD_BLOCK_ENABLED": "true"
   },
 
   "triggers": {
