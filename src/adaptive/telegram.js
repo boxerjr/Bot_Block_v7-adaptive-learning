@@ -20,8 +20,8 @@ export function coarseUaFamily(ua = "") {
   return "unknown";
 }
 
-function verdictIcon(v63, v7) {
-  if (v63 === "block" || v7 === "block") return "🤖 BOT_SHADOW";
+function verdictIcon(detection, v7) {
+  if (detection === "block" || v7 === "block") return "🤖 BOT_SHADOW";
   if (v7 === "review") return "⚠️ REVIEW_SHADOW";
   return "👤 HUMAN_PASS";
 }
@@ -38,8 +38,8 @@ export function buildTelegramHitMessage({ sessionId, network = {}, early = {}, u
     `ASN: ${clean(network.asn || "?")}`,
     `Org: ${clean(network.org || "?")}`,
     `UAFamily: ${clean(uaFamily)}`,
-    `Early: ${earlyState}`,
-    "Mode: shadow / no enforcement / no training",
+    `EarlyPolicy: ${earlyState}`,
+    "Mode: shadow / deep inspection / no enforcement / no training",
   ].join("\n");
 }
 
@@ -49,6 +49,8 @@ export function buildTelegramDecisionMessage({
   decision = {},
   v7 = null,
   fingerprint = null,
+  policyBaseline = null,
+  monitorDeepInspection = false,
 }) {
   const ai1 = decision.ai?.ai || null;
   const ai2 = decision.ai?.critic || null;
@@ -60,11 +62,22 @@ export function buildTelegramDecisionMessage({
     `Country: ${clean(network.country || "?")}`,
     `ASN: ${clean(network.asn || "?")}`,
     `Org: ${clean(network.org || "?")}`,
+  ];
+
+  if (policyBaseline) {
+    lines.push(
+      `PolicyV6.3: ${clean(policyBaseline.finalDecision || "unknown")} stage=${clean(policyBaseline.decisionStage || "unknown")} reason=${clean(policyBaseline.reason || "-")}`,
+      `PolicyWouldBlock: ${!!policyBaseline.wouldBlock}`,
+      `MonitorDeepInspection: ${!!monitorDeepInspection}`
+    );
+  }
+
+  lines.push(
+    `MonitorDetection: ${clean(decision.finalDecision || "unknown")} stage=${clean(decision.decisionStage || "unknown")}`,
     `LocalRisk: ${Number(decision.local?.risk || 0)}`,
     `SpoofSignals: ${Number(decision.local?.spoofSignals || 0)}`,
-    `StrongHardwareSpoof: ${!!decision.local?.strongHardwareSpoof}`,
-    `V6.3: ${clean(decision.finalDecision || "unknown")} stage=${clean(decision.decisionStage || "unknown")}`,
-  ];
+    `StrongHardwareSpoof: ${!!decision.local?.strongHardwareSpoof}`
+  );
 
   if (ai1) {
     lines.push(
