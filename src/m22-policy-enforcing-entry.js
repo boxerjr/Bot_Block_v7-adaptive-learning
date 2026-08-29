@@ -4,9 +4,12 @@ import { boolEnv, csvSet } from "./engine/config.js";
 import { evaluateV63MobileGate } from "./compat/v63/device.js";
 import { checkMonitorRateLimit } from "./adaptive/monitor-rate-limit.js";
 import { sendTelegramWithKeyboard } from "./adaptive/manual-ip-block.js";
+import { classifyOrganization } from "./adaptive/org-intelligence.js";
 import {
   classifyAsn,
   getAsnIntelligenceHealth,
+  orgHardPromotionEnabled,
+  promoteAsnToHardFromOrganization,
 } from "./adaptive/asn-intelligence.js";
 
 function waitUntil(ctx, promise) {
@@ -47,21 +50,29 @@ function blockResponse() {
   });
 }
 
-function buildAsnBlockMessage(network = {}, intel = {}) {
-  return [
+function buildAsnBlockMessage(network = {}, intel = {}, orgIntel = null) {
+  const lines = [
     "🚫 BLOCK_BY_ASN",
     `ASN: ${clean(network.asn || "?")}`,
     `Org: ${clean(network.org || "?")}`,
+  ];
+  if (orgIntel) {
+    lines.push(
+      `OrgIntel: ${clean(orgIntel.class || "unknown")} conf=${Number(orgIntel.confidence || 0)} rule=${clean(orgIntel.matchedRule || "none")}`
+    );
+  }
+  lines.push(
     `Country: ${clean(network.country || "?")}`,
     `ASNClass: ${clean(intel.tier || "hard")}`,
     `ASNSource: ${clean(intel.source || "unknown")}`,
     `Reason: ${clean(intel.reason || "hard_block_asn")}`,
-    "PolicyOrder: ASN before country",
+    "PolicyOrder: ASN/Org infrastructure before country",
     "Decision: block",
     "Enforcement: BLOCK_URL or 404 fallback",
     "DatasetEligible: false",
-    "RawIP/UA stored: false",
-  ].join("\n");
+    "RawIP/UA stored: false"
+  );
+  return lines.join("\n");
 }
 
 function buildDeviceBlockMessage(network = {}, gate = {}) {
@@ -94,8 +105,11 @@ async function health(request, env, ctx) {
   return Response.json(
     {
       ...data,
-      m22_policy_enforcement_order: ["hard_asn", "country", "mobile_only_device", "manual_ip", "monitor_ai"],
+      m22_policy_enforcement_order: ["hard_asn_or_org_infrastructure", "country", "mobile_only_device", "manual_ip", "monitor_ai"],
       m22_asn_policy_precedes_country: true,
+      m22_org_infrastructure_hard_block_enabled: asnHealth.orgHardPromotionEnabled,
+      m22_org_infrastructure_promotes_asn_to_hard: true,
+      m22_org_auto_hard_count: asnHealth.orgAutoHardCount,
       m22_asn_hard_block_enforcing: asnHealth.hardBlockEnabled,
       m22_asn_static_hard_count: asnHealth.staticHardCount,
       m22_asn_static_risk_count: asnHealth.staticRiskCount,
@@ -115,26 +129,56 @@ async function health(request, env, ctx) {
   );
 }
 
+async function sendInfrastructureBlock(request, env, ctx, network, intel, orgIntel = null) {
+  const limiter = await checkMonitorRateLimit({
+    db: env.DB,
+    secret: env.CHALLENGE_SECRET,
+    ip: clientIp(request),
+    limit: rateLimitPerMinute(env),
+  });
+
+  if (limiter.allowed) {
+    waitUntil(ctx, sendTelegramWithKeyboard(env, buildAsnBlockMessage(network, intel, orgIntel), null));
+  }
+
+  return blockResponse();
+}
+
 async function monitorPage(request, env, ctx) {
   const network = networkInfo(request);
 
-  // Hard ASN intelligence is evaluated before country. This allows known
-  // datacenter/high-confidence malicious infrastructure to be attributed and
-  // blocked as ASN traffic instead of being hidden behind BLOCK_BY_COUNTRY.
+  // First, block any ASN already known as hard from static seeds, Spamhaus, or
+  // a previous organization-based promotion.
   const asnIntel = await classifyAsn(env, network.asn);
   if (asnIntel.hardBlock) {
-    const limiter = await checkMonitorRateLimit({
-      db: env.DB,
-      secret: env.CHALLENGE_SECRET,
-      ip: clientIp(request),
-      limit: rateLimitPerMinute(env),
-    });
+    return sendInfrastructureBlock(request, env, ctx, network, asnIntel);
+  }
 
-    if (limiter.allowed) {
-      waitUntil(ctx, sendTelegramWithKeyboard(env, buildAsnBlockMessage(network, asnIntel), null));
-    }
+  // Then classify Cloudflare's organization name. Under the configured policy,
+  // hosting/cloud and VPN/proxy infrastructure are deterministic block classes.
+  // The observed ASN is persisted as a dynamic hard ASN so later requests are
+  // rejected before country without needing to re-learn the organization.
+  const orgIntel = classifyOrganization(network.org);
+  if (
+    orgHardPromotionEnabled(env) &&
+    ["hosting_cloud", "vpn_proxy"].includes(orgIntel.class)
+  ) {
+    const promoted = await promoteAsnToHardFromOrganization(
+      env,
+      network.asn,
+      orgIntel.class,
+      orgIntel.matchedRule
+    );
 
-    return blockResponse();
+    const intel = promoted.promoted
+      ? promoted
+      : {
+          tier: "hard",
+          source: "org_infrastructure_policy",
+          reason: `org_${orgIntel.class}:${orgIntel.matchedRule || "unknown"}`,
+        };
+
+    return sendInfrastructureBlock(request, env, ctx, network, intel, orgIntel);
   }
 
   if (!countryAllowed(env, network.country)) {

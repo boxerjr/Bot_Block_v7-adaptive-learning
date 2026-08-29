@@ -39,17 +39,28 @@ test("known safe access ASN is not hard-blocked by static seed", async () => {
   assert.equal(telefonica.hardBlock, false);
 });
 
-test("hard ASN gate executes before country", () => {
+test("hard ASN and organization infrastructure gate execute before country", () => {
   assert.match(
     policy,
-    /m22_policy_enforcement_order: \["hard_asn", "country", "mobile_only_device", "manual_ip", "monitor_ai"\]/
+    /m22_policy_enforcement_order: \["hard_asn_or_org_infrastructure", "country", "mobile_only_device", "manual_ip", "monitor_ai"\]/
   );
   const asnIndex = policy.indexOf("const asnIntel = await classifyAsn");
+  const orgIndex = policy.indexOf("const orgIntel = classifyOrganization");
   const countryIndex = policy.indexOf("if (!countryAllowed(env, network.country))");
   assert.ok(asnIndex >= 0);
-  assert.ok(countryIndex > asnIndex);
+  assert.ok(orgIndex > asnIndex);
+  assert.ok(countryIndex > orgIndex);
   assert.match(policy, /BLOCK_BY_ASN/);
-  assert.match(policy, /PolicyOrder: ASN before country/);
+  assert.match(policy, /PolicyOrder: ASN\/Org infrastructure before country/);
+});
+
+test("hosting and VPN organization classes are deterministic blocks and promote ASN to hard", () => {
+  assert.match(wrangler, /"ORG_INFRASTRUCTURE_HARD_BLOCK_ENABLED": "true"/);
+  assert.match(policy, /\["hosting_cloud", "vpn_proxy"\]\.includes\(orgIntel\.class\)/);
+  assert.match(policy, /promoteAsnToHardFromOrganization/);
+  assert.match(intel, /source = 'org_auto_hard'/);
+  assert.match(intel, /VALUES \(\?, 'org_auto_hard', 'hard'/);
+  assert.match(intel, /expires_at_ms\)\n\s*VALUES \(\?, 'org_auto_hard', 'hard', \?, \?, NULL\)/);
 });
 
 test("Spamhaus ASN-DROP is enabled and refreshed from cron no more than daily", () => {
@@ -61,7 +72,7 @@ test("Spamhaus ASN-DROP is enabled and refreshed from cron no more than daily", 
   assert.match(intel, /spamhaus_asndrop_next_refresh_ms/);
 });
 
-test("external ASN feed does not store raw IP or UA", () => {
+test("external and organization ASN intelligence do not store raw IP or UA", () => {
   assert.doesNotMatch(intel, /cf-connecting-ip/i);
   assert.doesNotMatch(intel, /user-agent.*event/i);
   assert.match(policy, /RawIP\/UA stored: false/);
