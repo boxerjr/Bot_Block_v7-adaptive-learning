@@ -2,16 +2,30 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-const source = readFileSync(new URL("../src/m22-deep-monitor-entry.js", import.meta.url), "utf8");
+const source = readFileSync(
+  new URL("../src/m22-deep-monitor-entry-v2.js", import.meta.url),
+  "utf8"
+);
+const deepHelper = readFileSync(
+  new URL("../src/adaptive/monitor-deep-inspection.js", import.meta.url),
+  "utf8"
+);
 const wrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
 
-test("public monitor preserves country policy but continues shadow inspection", () => {
-  assert.match(source, /policyDecision\.finalDecision === "block"/);
-  assert.match(source, /policyDecision\.decisionStage === "country"/);
-  assert.match(source, /monitorEnvAllowingCountry/);
-  assert.match(source, /deep_inspection_after_country_policy_block/);
+test("public monitor uses monitor-only deep inspection through policy gates", () => {
+  assert.match(source, /runMonitorDeepInspection/);
+  assert.match(source, /policy_baseline/);
+  assert.match(source, /monitor_detection/);
   assert.match(source, /PolicyV6\.3:/);
+  assert.match(source, /CountryGate:/);
+  assert.match(source, /DeviceGate:/);
   assert.match(source, /MonitorDeepInspection:/);
+
+  assert.match(deepHelper, /evaluateV63EarlyRules/);
+  assert.match(deepHelper, /evaluateV63MobileGate/);
+  assert.match(deepHelper, /scoreV63Signals/);
+  assert.match(deepHelper, /fingerprintV63Reputation/);
+  assert.match(deepHelper, /runV63AiPipeline/);
 });
 
 test("deep monitor remains non-enforcing and excluded from training", () => {
@@ -24,7 +38,8 @@ test("deep monitor remains non-enforcing and excluded from training", () => {
   assert.match(source, /raw_telemetry_stored: false/);
 });
 
-test("wrangler routes the preview through the deep monitor wrapper", () => {
-  assert.match(wrangler, /"main": "src\/m22-deep-monitor-entry\.js"/);
+test("wrangler routes preview through monitor deep inspection v2", () => {
+  assert.match(wrangler, /"main": "src\/m22-deep-monitor-entry-v2\.js"/);
   assert.match(wrangler, /"ALLOWED_COUNTRIES": "ES"/);
+  assert.match(wrangler, /"MOBILE_ONLY": "true"/);
 });
