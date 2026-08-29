@@ -92,15 +92,78 @@ export function spamhausAsnDropEnabled(env) {
   return boolEnv(env?.ASN_SPAMHAUS_DROP_ENABLED, true);
 }
 
+export function orgHardPromotionEnabled(env) {
+  return boolEnv(env?.ORG_INFRASTRUCTURE_HARD_BLOCK_ENABLED, true);
+}
+
+export async function promoteAsnToHardFromOrganization(
+  env,
+  asnValue,
+  organizationClass,
+  organizationRule = "unknown",
+  nowMs = Date.now()
+) {
+  if (!orgHardPromotionEnabled(env)) return { promoted: false, reason: "disabled" };
+  if (!env?.DB) return { promoted: false, reason: "db_unavailable" };
+
+  const asn = normalizeAsn(asnValue);
+  if (!asn) return { promoted: false, reason: "asn_unavailable" };
+  if (!["hosting_cloud", "vpn_proxy"].includes(String(organizationClass || ""))) {
+    return { promoted: false, reason: "organization_not_hard_class" };
+  }
+  if (!(await ensureSchema(env.DB))) return { promoted: false, reason: "schema_unavailable" };
+
+  const reason = `org_${String(organizationClass).slice(0, 40)}:${String(organizationRule || "unknown").slice(0, 80)}`;
+  try {
+    await env.DB
+      .prepare(
+        `INSERT INTO asn_intelligence
+         (asn, source, tier, reason, updated_at_ms, expires_at_ms)
+         VALUES (?, 'org_auto_hard', 'hard', ?, ?, NULL)
+         ON CONFLICT(asn) DO UPDATE SET
+           source = CASE
+             WHEN asn_intelligence.source = 'spamhaus_asndrop' THEN asn_intelligence.source
+             ELSE excluded.source
+           END,
+           tier = 'hard',
+           reason = CASE
+             WHEN asn_intelligence.source = 'spamhaus_asndrop' THEN asn_intelligence.reason
+             ELSE excluded.reason
+           END,
+           updated_at_ms = excluded.updated_at_ms,
+           expires_at_ms = CASE
+             WHEN asn_intelligence.source = 'spamhaus_asndrop' THEN asn_intelligence.expires_at_ms
+             ELSE NULL
+           END`
+      )
+      .bind(asn, reason, nowMs)
+      .run();
+
+    return {
+      promoted: true,
+      asn,
+      tier: "hard",
+      source: "org_auto_hard",
+      reason,
+    };
+  } catch (error) {
+    return {
+      promoted: false,
+      reason: "write_failed",
+      error: String(error?.message || error).slice(0, 120),
+    };
+  }
+}
+
 export async function classifyAsn(env, asnValue, nowMs = Date.now()) {
   const asn = normalizeAsn(asnValue);
   if (!asn) {
     return { asn: null, tier: "unknown", source: "none", reason: "asn_unavailable", hardBlock: false };
   }
 
-  // Spamhaus ASN-DROP is the highest-confidence source. It intentionally
-  // overrides static SAFE/RISK seeds if a future feed ever lists the ASN.
-  if (spamhausAsnDropEnabled(env) && env?.DB) {
+  // Dynamic hard intelligence and Spamhaus both live in D1. Any active hard
+  // row intentionally overrides static SAFE/RISK seeds.
+  if (env?.DB) {
     try {
       const row = await env.DB
         .prepare(
@@ -113,13 +176,15 @@ export async function classifyAsn(env, asnValue, nowMs = Date.now()) {
         .bind(asn, nowMs)
         .first();
       if (row?.tier === "hard") {
-        return {
-          asn,
-          tier: "hard",
-          source: row.source || "spamhaus_asndrop",
-          reason: row.reason || "spamhaus_asn_drop",
-          hardBlock: asnHardBlockEnabled(env),
-        };
+        if (row.source !== "spamhaus_asndrop" || spamhausAsnDropEnabled(env)) {
+          return {
+            asn,
+            tier: "hard",
+            source: row.source || "dynamic_hard",
+            reason: row.reason || "dynamic_hard_asn",
+            hardBlock: asnHardBlockEnabled(env),
+          };
+        }
       }
     } catch {}
   }
@@ -206,8 +271,6 @@ export async function refreshSpamhausAsnDrop(env, nowMs = Date.now()) {
     return { refreshed: false, reason: "not_due", nextRefreshMs };
   }
 
-  // Reserve the next daily slot before the network call. Spamhaus asks users
-  // not to download DROP datasets more than once per day.
   await setMeta(env.DB, "spamhaus_asndrop_next_refresh_ms", nowMs + DEFAULT_REFRESH_MS, nowMs);
 
   let response;
@@ -277,16 +340,18 @@ export async function getAsnIntelligenceHealth(env, nowMs = Date.now()) {
   const result = {
     hardBlockEnabled: asnHardBlockEnabled(env),
     spamhausEnabled: spamhausAsnDropEnabled(env),
+    orgHardPromotionEnabled: orgHardPromotionEnabled(env),
     staticHardCount: HARD_ASNS.size,
     staticRiskCount: RISK_ASNS.size,
     staticSafeCount: SAFE_ASNS.size,
     spamhausCount: 0,
+    orgAutoHardCount: 0,
     spamhausLastSuccessMs: null,
   };
 
   if (!env?.DB) return result;
   try {
-    const count = await env.DB
+    const spamhaus = await env.DB
       .prepare(
         `SELECT COUNT(*) AS n
          FROM asn_intelligence
@@ -295,7 +360,18 @@ export async function getAsnIntelligenceHealth(env, nowMs = Date.now()) {
       )
       .bind(nowMs)
       .first();
-    result.spamhausCount = Number(count?.n || 0);
+    result.spamhausCount = Number(spamhaus?.n || 0);
+
+    const orgAuto = await env.DB
+      .prepare(
+        `SELECT COUNT(*) AS n
+         FROM asn_intelligence
+         WHERE source = 'org_auto_hard'
+           AND tier = 'hard'`
+      )
+      .first();
+    result.orgAutoHardCount = Number(orgAuto?.n || 0);
+
     const last = await getMeta(env.DB, "spamhaus_asndrop_last_success_ms");
     result.spamhausLastSuccessMs = last ? Number(last) : null;
   } catch {}
