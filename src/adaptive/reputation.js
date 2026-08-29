@@ -44,6 +44,23 @@ function halfLifeDays(entityType) {
   return entityType === "fingerprint" ? 14 : 30;
 }
 
+function scoreFromWeights(humanWeight, hostileWeight) {
+  const evidenceWeight = humanWeight + hostileWeight;
+  const balance = humanWeight - hostileWeight;
+  const reputationScore = clamp(
+    50 + 50 * (balance / (evidenceWeight + PRIOR_WEIGHT)),
+    0,
+    100
+  );
+
+  return {
+    reputationScore: Number(reputationScore.toFixed(3)),
+    humanWeight: Number(humanWeight.toFixed(6)),
+    hostileWeight: Number(hostileWeight.toFixed(6)),
+    evidenceWeight: Number(evidenceWeight.toFixed(6)),
+  };
+}
+
 export function computeReputationFromFeedback(
   rows = [],
   { entityType = "asn", nowMs = Date.now() } = {}
@@ -68,19 +85,42 @@ export function computeReputationFromFeedback(
     feedbackCount += 1;
   }
 
-  const evidenceWeight = humanWeight + hostileWeight;
-  const balance = humanWeight - hostileWeight;
-  const reputationScore = clamp(
-    50 + 50 * (balance / (evidenceWeight + PRIOR_WEIGHT)),
-    0,
-    100
-  );
+  return {
+    ...scoreFromWeights(humanWeight, hostileWeight),
+    feedbackCount,
+  };
+}
+
+/**
+ * Applies additional time decay to a cached reputation snapshot.
+ * The cache timestamp must be the time the feedback weights were last rebuilt,
+ * not the last observation time. This makes stale evidence drift toward 50.
+ */
+export function decayStoredReputation(
+  reputation,
+  {
+    entityType = "asn",
+    nowMs = Date.now(),
+    lastFeedbackAt = null,
+  } = {}
+) {
+  const human = Math.max(0, Number(reputation?.humanWeight || 0));
+  const hostile = Math.max(0, Number(reputation?.hostileWeight || 0));
+  const feedbackCount = Math.max(0, Number(reputation?.feedbackCount || 0));
+
+  if (human + hostile <= 0 || !lastFeedbackAt) {
+    return {
+      ...scoreFromWeights(human, hostile),
+      feedbackCount,
+    };
+  }
+
+  const lastMs = Date.parse(lastFeedbackAt);
+  const ageMs = Number.isFinite(lastMs) ? Math.max(0, nowMs - lastMs) : 0;
+  const factor = Math.pow(0.5, ageMs / (halfLifeDays(entityType) * DAY_MS));
 
   return {
-    reputationScore: Number(reputationScore.toFixed(3)),
-    humanWeight: Number(humanWeight.toFixed(6)),
-    hostileWeight: Number(hostileWeight.toFixed(6)),
-    evidenceWeight: Number(evidenceWeight.toFixed(6)),
+    ...scoreFromWeights(human * factor, hostile * factor),
     feedbackCount,
   };
 }
