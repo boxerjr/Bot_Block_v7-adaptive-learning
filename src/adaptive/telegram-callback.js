@@ -136,28 +136,102 @@ async function webhookSecret(secret) {
   return `m22_${await hmacShort(secret, "m22-telegram-webhook-secret", 32)}`;
 }
 
-async function markerSid(secret, origin) {
-  return `m22tgwh_${await hmacShort(secret, `origin:${origin}`, 18)}`;
+async function webhookOriginId(secret, origin) {
+  return await hmacShort(secret, `m22-webhook-origin:${origin}`, 18);
 }
 
-export async function ensureTelegramWebhook(env, requestUrl, nowMs = Date.now()) {
-  if (!env?.DB || !env?.CHALLENGE_SECRET || !env?.TELEGRAM_TOKEN || !requestUrl) {
-    return { ready: false, configured: false, reason: "missing_binding" };
-  }
+async function webhookSecretId(secret) {
+  return await hmacShort(secret, "m22-webhook-secret-installed", 18);
+}
 
-  const origin = new URL(requestUrl).origin;
-  const sid = await markerSid(env.CHALLENGE_SECRET, origin);
+async function readMarker(db, sid, nowMs) {
   try {
-    const existing = await env.DB
+    const row = await db
       .prepare(`SELECT expires_at_ms FROM adaptive_live_capture_sessions WHERE sid = ? LIMIT 1`)
       .bind(sid)
       .first();
-    if (existing && Number(existing.expires_at_ms) > nowMs) {
-      return { ready: true, configured: true, cached: true, origin };
-    }
-  } catch {}
+    return !!row && Number(row.expires_at_ms) > nowMs;
+  } catch {
+    return false;
+  }
+}
 
+async function writeMarker(db, sid, nowMs, ttlMs) {
+  try {
+    await db
+      .prepare(
+        `INSERT OR REPLACE INTO adaptive_live_capture_sessions
+         (sid, issued_at_ms, expires_at_ms, consumed_at_ms)
+         VALUES (?, ?, ?, ?)`
+      )
+      .bind(sid, nowMs, nowMs + ttlMs, nowMs)
+      .run();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function markWebhookVerified(db, activeSid, secretSid, nowMs) {
+  try {
+    await db
+      .prepare(`DELETE FROM adaptive_live_capture_sessions WHERE sid GLOB 'm22tgwh_active_*' AND sid <> ?`)
+      .bind(activeSid)
+      .run();
+  } catch {}
+  await writeMarker(db, activeSid, nowMs, 60_000);
+  await writeMarker(db, secretSid, nowMs, 86_400_000);
+}
+
+/**
+ * Verify that Telegram is actually pointing callback_query updates at the
+ * current V7 origin. D1 is only a short verification cache; it is never treated
+ * as proof after another deployment/origin may have replaced the bot webhook.
+ */
+export async function ensureTelegramWebhook(env, requestUrl, nowMs = Date.now()) {
+  if (!env?.DB || !env?.CHALLENGE_SECRET || !env?.TELEGRAM_TOKEN || !requestUrl) {
+    return { ready: false, configured: false, verified: false, reason: "missing_binding" };
+  }
+
+  const origin = new URL(requestUrl).origin;
   const webhookUrl = new URL("/_telegram/webhook", origin).toString();
+  const activeSid = `m22tgwh_active_${await webhookOriginId(env.CHALLENGE_SECRET, origin)}`;
+  const secretSid = `m22tgwh_secret_${await webhookSecretId(env.CHALLENGE_SECRET)}`;
+
+  // Fast path: only trust a very recent verification owned by this exact origin.
+  if (await readMarker(env.DB, activeSid, nowMs)) {
+    return {
+      ready: true,
+      configured: true,
+      verified: true,
+      cached: true,
+      origin,
+      webhook_url_matches: true,
+    };
+  }
+
+  const info = await telegramApi(env, "getWebhookInfo", {});
+  const currentUrl = String(info?.body?.result?.url || "");
+  const urlMatches = info.ok && currentUrl === webhookUrl;
+  const currentSecretInstalled = await readMarker(env.DB, secretSid, nowMs);
+
+  // If Telegram reports the correct URL and this CHALLENGE_SECRET previously
+  // installed the webhook secret token, refresh the short verification cache.
+  if (urlMatches && currentSecretInstalled) {
+    await markWebhookVerified(env.DB, activeSid, secretSid, nowMs);
+    return {
+      ready: true,
+      configured: true,
+      verified: true,
+      cached: false,
+      repaired: false,
+      origin,
+      webhook_url_matches: true,
+      pending_update_count: Number(info?.body?.result?.pending_update_count || 0),
+    };
+  }
+
+  // URL mismatch, stale external overwrite, or a new CHALLENGE_SECRET: repair it.
   const secretToken = await webhookSecret(env.CHALLENGE_SECRET);
   const configured = await telegramApi(env, "setWebhook", {
     url: webhookUrl,
@@ -166,21 +240,43 @@ export async function ensureTelegramWebhook(env, requestUrl, nowMs = Date.now())
     drop_pending_updates: false,
   });
   if (!configured.ok) {
-    return { ready: true, configured: false, origin, status: configured.status || null };
+    return {
+      ready: true,
+      configured: false,
+      verified: false,
+      repaired: false,
+      origin,
+      reason: "set_webhook_failed",
+      status: configured.status || null,
+    };
   }
 
-  try {
-    await env.DB
-      .prepare(
-        `INSERT OR REPLACE INTO adaptive_live_capture_sessions
-         (sid, issued_at_ms, expires_at_ms, consumed_at_ms)
-         VALUES (?, ?, ?, ?)`
-      )
-      .bind(sid, nowMs, nowMs + 86_400_000, nowMs)
-      .run();
-  } catch {}
+  const verify = await telegramApi(env, "getWebhookInfo", {});
+  const verifiedUrl = String(verify?.body?.result?.url || "");
+  const verified = verify.ok && verifiedUrl === webhookUrl;
+  if (!verified) {
+    return {
+      ready: true,
+      configured: false,
+      verified: false,
+      repaired: true,
+      origin,
+      reason: "webhook_verification_failed",
+      status: verify.status || null,
+    };
+  }
 
-  return { ready: true, configured: true, cached: false, origin };
+  await markWebhookVerified(env.DB, activeSid, secretSid, nowMs);
+  return {
+    ready: true,
+    configured: true,
+    verified: true,
+    cached: false,
+    repaired: true,
+    origin,
+    webhook_url_matches: true,
+    pending_update_count: Number(verify?.body?.result?.pending_update_count || 0),
+  };
 }
 
 async function answerCallback(env, callbackId, text, showAlert = false) {
