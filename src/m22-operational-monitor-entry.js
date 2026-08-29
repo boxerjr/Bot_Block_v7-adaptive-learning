@@ -1,5 +1,6 @@
 import m22DeepWorker from "./m22-deep-monitor-entry-v2.js";
-import { networkInfo } from "./engine/network.js";
+import { clientIp, networkInfo } from "./engine/network.js";
+import { checkMonitorRateLimit } from "./adaptive/monitor-rate-limit.js";
 import { deriveMonitorVerdict } from "./adaptive/monitor-verdict.js";
 import {
   buildTelegramDecisionMessage,
@@ -9,6 +10,10 @@ import {
 function waitUntil(ctx, promise) {
   if (ctx?.waitUntil) ctx.waitUntil(promise);
   else return promise;
+}
+
+function rateLimitPerMinute(env) {
+  return Math.max(1, Math.min(120, Number(env.RATE_LIMIT_PER_MIN || 12) || 12));
 }
 
 function rebuildDecision(data = {}) {
@@ -74,11 +79,36 @@ async function operationalHealth(request, env, ctx) {
       m22_human_classes: ["human_mobile", "human_desktop"],
       m22_review_class: "unknown",
       m22_telegram_final_verdict_ready: !!env.TELEGRAM_TOKEN && !!env.TELEGRAM_CHAT_ID,
+      m22_rate_limit_ready: !!env.DB && !!env.CHALLENGE_SECRET,
+      m22_rate_limit_per_minute_per_network: rateLimitPerMinute(env),
+      m22_rate_limit_raw_ip_stored: false,
       m22_enforcing: false,
       m22_dataset_eligible: false,
     },
     { status: response.status, headers: { "cache-control": "no-store" } }
   );
+}
+
+async function operationalCheck(request, env, ctx) {
+  const result = await checkMonitorRateLimit({
+    db: env.DB,
+    secret: env.CHALLENGE_SECRET,
+    ip: clientIp(request),
+    limit: rateLimitPerMinute(env),
+  });
+
+  if (!result.allowed) {
+    return new Response("Too Many Monitor Requests", {
+      status: 429,
+      headers: {
+        "cache-control": "no-store",
+        "retry-after": String(result.retryAfterSeconds || 60),
+        "x-robots-tag": "noindex, nofollow",
+      },
+    });
+  }
+
+  return m22DeepWorker.fetch(request, env, ctx);
 }
 
 async function operationalSubmit(request, env, ctx) {
@@ -176,6 +206,9 @@ export default {
 
     if (url.pathname === "/_health") {
       return operationalHealth(request, env, ctx);
+    }
+    if (url.pathname === "/check" || url.pathname === "/check/") {
+      return operationalCheck(request, env, ctx);
     }
     if (url.pathname === "/_shadow/v7-monitor-submit") {
       return operationalSubmit(request, env, ctx);
