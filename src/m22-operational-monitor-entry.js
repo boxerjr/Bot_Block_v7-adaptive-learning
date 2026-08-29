@@ -4,7 +4,6 @@ import { checkMonitorRateLimit } from "./adaptive/monitor-rate-limit.js";
 import { deriveMonitorVerdict } from "./adaptive/monitor-verdict.js";
 import { buildTelegramDecisionMessage } from "./adaptive/telegram.js";
 import {
-  buildManualIpKeyboard,
   clearManualIpBlocked,
   deriveManualIpKey,
   getEventIpKey,
@@ -14,6 +13,11 @@ import {
   setManualIpBlocked,
   verifyManualIpActionToken,
 } from "./adaptive/manual-ip-block.js";
+import {
+  buildTelegramCallbackKeyboard,
+  ensureTelegramWebhook,
+  handleTelegramCallbackWebhook,
+} from "./adaptive/telegram-callback.js";
 
 function waitUntil(ctx, promise) {
   if (ctx?.waitUntil) ctx.waitUntil(promise);
@@ -105,6 +109,9 @@ async function operationalHealth(request, env, ctx) {
       m22_human_classes: ["human_mobile", "human_desktop"],
       m22_review_class: "unknown",
       m22_telegram_final_verdict_ready: !!env.TELEGRAM_TOKEN && !!env.TELEGRAM_CHAT_ID,
+      m22_telegram_callback_buttons_ready: !!env.TELEGRAM_TOKEN && !!env.TELEGRAM_CHAT_ID && !!env.CHALLENGE_SECRET,
+      m22_telegram_callback_opens_browser: false,
+      m22_telegram_webhook_path: "/_telegram/webhook",
       m22_rate_limit_ready: !!env.DB && !!env.CHALLENGE_SECRET,
       m22_rate_limit_per_minute_per_network: rateLimitPerMinute(env),
       m22_rate_limit_raw_ip_stored: false,
@@ -157,6 +164,7 @@ async function operationalCheck(request, env, ctx) {
   return m22DeepWorker.fetch(request, env, ctx);
 }
 
+// Kept only so buttons from older Telegram messages still work.
 async function handleManualIpAction(request, env, ctx) {
   if (request.method !== "GET") {
     return new Response("Method Not Allowed", { status: 405 });
@@ -224,8 +232,6 @@ async function handleManualIpAction(request, env, ctx) {
 }
 
 async function operationalSubmit(request, env, ctx) {
-  // Suppress the older final Telegram message. The page-hit Telegram notification
-  // is unaffected because only this submit path is wrapped with muted credentials.
   const mutedEnv = {
     ...env,
     TELEGRAM_TOKEN: undefined,
@@ -275,18 +281,27 @@ async function operationalSubmit(request, env, ctx) {
 
   let manualIpMapped = false;
   let manualKeyboard = null;
+  let telegramWebhookConfigured = false;
   if (env.DB && env.CHALLENGE_SECRET && data.event_id) {
     try {
       const ipKey = await deriveManualIpKey(env.CHALLENGE_SECRET, clientIp(request));
       manualIpMapped = !!ipKey && await rememberEventIpKey(env.DB, data.event_id, ipKey);
       if (manualIpMapped) {
-        manualKeyboard = await buildManualIpKeyboard(request.url, env.CHALLENGE_SECRET, data.event_id);
+        const webhook = await ensureTelegramWebhook(env, request.url);
+        telegramWebhookConfigured = webhook.configured === true;
+        if (telegramWebhookConfigured) {
+          manualKeyboard = await buildTelegramCallbackKeyboard(
+            env.CHALLENGE_SECRET,
+            data.event_id,
+            "unblocked"
+          );
+        }
       }
     } catch {}
   }
 
-  const manualLine = manualIpMapped
-    ? "ManualIPControl: exact IP — BLOCK / UNBLOCK buttons available"
+  const manualLine = manualIpMapped && telegramWebhookConfigured
+    ? "ManualIPControl: exact IP — Telegram callback BLOCK / UNBLOCK"
     : "ManualIPControl: unavailable";
 
   waitUntil(
@@ -311,6 +326,7 @@ async function operationalSubmit(request, env, ctx) {
     {
       ...data,
       telegram_configured: !!env.TELEGRAM_TOKEN && !!env.TELEGRAM_CHAT_ID,
+      telegram_callback_webhook_configured: telegramWebhookConfigured,
       v63_detection: {
         final_decision: data.final_decision,
         would_block: !!data.would_block,
@@ -321,8 +337,9 @@ async function operationalSubmit(request, env, ctx) {
       monitor_final_decision: monitorVerdict.decision,
       monitor_is_bot: ["automation", "crawler"].includes(monitorVerdict.classification),
       monitor_is_spoof: monitorVerdict.classification === "spoofed_device",
-      manual_ip_control_ready: manualIpMapped,
+      manual_ip_control_ready: manualIpMapped && telegramWebhookConfigured,
       manual_ip_control_exact_ip: true,
+      manual_ip_callback_opens_browser: false,
       manual_ip_raw_stored: false,
       automated_enforcing: false,
       manual_ip_block_enforcing: true,
@@ -340,6 +357,9 @@ export default {
 
     if (url.pathname === "/_health") {
       return operationalHealth(request, env, ctx);
+    }
+    if (url.pathname === "/_telegram/webhook") {
+      return handleTelegramCallbackWebhook(request, env);
     }
     if (url.pathname === "/_telegram/ip-action") {
       return handleManualIpAction(request, env, ctx);
