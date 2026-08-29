@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "v7-adaptive-learning",
-  "main": "src/m2-learning-entry.js",
+  "main": "src/m21-live-entry.js",
   "compatibility_date": "2026-08-29",
 
   "vars": {
