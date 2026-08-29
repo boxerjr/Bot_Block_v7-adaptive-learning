@@ -1,12 +1,13 @@
-name: M2.2 public monitor tests
+name: V7 regression tests
 
 on:
   push:
     branches:
+      - main
       - m2-2-public-monitor
   pull_request:
     branches:
-      - m2-1-live-shadow
+      - main
 
 permissions:
   contents: read
