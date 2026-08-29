@@ -1,7 +1,10 @@
 import m22DeepWorker from "./m22-deep-monitor-entry-v2.js";
 import { clientIp, networkInfo } from "./engine/network.js";
 import { csvSet } from "./engine/config.js";
-import { checkMonitorRateLimit } from "./adaptive/monitor-rate-limit.js";
+import {
+  checkMonitorRateLimit,
+  clearMonitorRateLimitForIpKey,
+} from "./adaptive/monitor-rate-limit.js";
 import { deriveMonitorVerdict } from "./adaptive/monitor-verdict.js";
 import { buildTelegramDecisionMessage } from "./adaptive/telegram.js";
 import {
@@ -16,6 +19,7 @@ import {
 } from "./adaptive/manual-ip-block.js";
 import {
   buildTelegramCallbackKeyboard,
+  buildTelegramIpKeyCallbackKeyboard,
   ensureTelegramWebhook,
   handleTelegramCallbackWebhook,
 } from "./adaptive/telegram-callback.js";
@@ -139,14 +143,14 @@ function buildRateLimitAutoBlockMessage(network = {}, limit = 3) {
 async function notifyRateLimitAutoBlock(request, env, ctx, limiter, network) {
   if (!limiter?.newlyAutoBlocked || !limiter?.ipKey || !env.DB || !env.CHALLENGE_SECRET) return;
   try {
-    const eventId = crypto.randomUUID();
-    const mapped = await rememberEventIpKey(env.DB, eventId, limiter.ipKey);
     let keyboard = null;
-    if (mapped) {
-      const webhook = await ensureTelegramWebhook(env, request.url);
-      if (webhook.configured === true) {
-        keyboard = await buildTelegramCallbackKeyboard(env.CHALLENGE_SECRET, eventId, "blocked");
-      }
+    const webhook = await ensureTelegramWebhook(env, request.url);
+    if (webhook.configured === true) {
+      keyboard = await buildTelegramIpKeyCallbackKeyboard(
+        env.CHALLENGE_SECRET,
+        limiter.ipKey,
+        "blocked"
+      );
     }
     waitUntil(
       ctx,
@@ -193,6 +197,7 @@ async function operationalHealth(request, env, ctx) {
       m22_rate_limit_auto_block_exact_ip: true,
       m22_rate_limit_exceed_action: "manual_ip_blocklist",
       m22_rate_limit_raw_ip_stored: false,
+      m22_rate_limit_unblock_resets_counters: true,
       m22_manual_ip_control_ready: !!env.DB && !!env.CHALLENGE_SECRET,
       m22_manual_ip_control_exact_ip: true,
       m22_manual_ip_control_raw_ip_stored: false,
@@ -208,8 +213,6 @@ async function operationalCheck(request, env, ctx) {
   const ip = clientIp(request);
   const network = networkInfo(request);
 
-  // A previously blocked exact IP always takes the block path immediately.
-  // This runs before the limiter so blocked clients never receive a 429 page.
   if (env.DB && env.CHALLENGE_SECRET) {
     const existingIpKey = await deriveManualIpKey(env.CHALLENGE_SECRET, ip);
     if (existingIpKey && (await isManualIpBlocked(env.DB, existingIpKey))) {
@@ -224,9 +227,6 @@ async function operationalCheck(request, env, ctx) {
     limit: rateLimitPerMinute(env),
   });
 
-  // Request 4 when limit=3 is immediately added to the exact-IP blocklist.
-  // Return the normal lower-layer block response so production redirects it to
-  // BLOCK_URL when configured; 404 remains the fallback when BLOCK_URL is absent.
   if (!result.allowed) {
     await notifyRateLimitAutoBlock(request, env, ctx, result, network);
     return blockResponse();
@@ -277,6 +277,10 @@ async function handleManualIpAction(request, env, ctx) {
     });
   }
 
+  if (payload.action === "unblock") {
+    await clearMonitorRateLimitForIpKey(env.DB, ipKey);
+  }
+
   const blocked = payload.action === "block";
   const title = blocked ? "🚫 IP BLOCKED" : "🔓 IP UNBLOCKED";
   const telegramText = [
@@ -286,7 +290,7 @@ async function handleManualIpAction(request, env, ctx) {
     "Raw IP stored: false",
     blocked
       ? "Future requests from this exact IP follow BLOCK_URL when configured; otherwise 404."
-      : "This exact IP can access the monitor again.",
+      : "This exact IP can access the monitor again. Rate-limit counters reset.",
   ].join("\n");
   waitUntil(ctx, sendTelegramWithKeyboard(env, telegramText, null));
 
