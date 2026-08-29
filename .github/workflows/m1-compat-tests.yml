@@ -12,7 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  m1-compat:
+    name: m1-compat
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
