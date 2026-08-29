@@ -43,7 +43,7 @@ test("manual IP action token is signed and action-scoped", async () => {
   assert.equal(wrongSecret, null);
 });
 
-test("Telegram keyboard exposes block and unblock controls without an IP", async () => {
+test("legacy Telegram URL keyboard remains available only for old messages", async () => {
   const keyboard = await buildManualIpKeyboard(
     "https://test.example/_shadow/v7-monitor-submit",
     "manual-secret",
@@ -64,8 +64,9 @@ test("operational monitor enforces only explicit manual exact-IP blocks", () => 
   assert.match(operational, /manual_ip_block_enforcing: true/);
   assert.match(operational, /automated_enforcing: false/);
   assert.match(operational, /manual_ip_raw_stored: false/);
-  assert.match(operational, /_telegram\/ip-action/);
-  assert.match(operational, /BLOCK \/ UNBLOCK buttons available/);
+  assert.match(operational, /_telegram\/webhook/);
+  assert.match(operational, /Telegram callback BLOCK \/ UNBLOCK/);
+  assert.match(operational, /manual_ip_callback_opens_browser: false/);
 });
 
 test("manual block persistence stores HMAC keys, never a raw-ip column", () => {
