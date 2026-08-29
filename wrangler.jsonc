@@ -43,16 +43,13 @@
       "database_id": "cbc40c25-cb43-4bd1-bb7c-b7963b7425c7",
       "migrations_dir": "migrations"
     }
-  ]
+  ],
 
-  /*
-  Add after creating the R2 resource:
-
-  ,"r2_buckets": [
+  "r2_buckets": [
     {
       "binding": "DATASET",
-      "bucket_name": "v7-adaptive-dataset"
+      "bucket_name": "v7-adaptive-dataset",
+      "jurisdiction": "eu"
     }
   ]
-  */
 }
