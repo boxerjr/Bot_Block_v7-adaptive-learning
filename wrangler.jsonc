@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "v7-adaptive-learning",
-  "main": "src/v7-production-entry.js",
+  "main": "src/v7-owner-timeout-entry.js",
   "compatibility_date": "2026-08-29",
 
   "vars": {
@@ -30,6 +30,10 @@
     "PRESERVE_PATH": "false",
     "REDIRECT_ENFORCING": "true",
     "OWNER_LEARNING_MODE": "false"
+  },
+
+  "triggers": {
+    "crons": ["* * * * *"]
   },
 
   "ai": {

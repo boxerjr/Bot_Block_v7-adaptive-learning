@@ -18,6 +18,10 @@ const production = readFileSync(
   new URL("../src/v7-production-entry.js", import.meta.url),
   "utf8"
 );
+const timeoutWrapper = readFileSync(
+  new URL("../src/v7-owner-timeout-entry.js", import.meta.url),
+  "utf8"
+);
 const deepHelper = readFileSync(
   new URL("../src/adaptive/monitor-deep-inspection.js", import.meta.url),
   "utf8"
@@ -104,8 +108,10 @@ test("deep monitor stays excluded from training while production wrapper owns re
   assert.match(production, /v7_redirect_enforcing/);
 });
 
-test("wrangler routes production through V7 redirect entry with 3 per minute", () => {
-  assert.match(wrangler, /"main": "src\/v7-production-entry\.js"/);
+test("wrangler routes production through timeout wrapper, then V7 redirect entry, with 3 per minute", () => {
+  assert.match(wrangler, /"main": "src\/v7-owner-timeout-entry\.js"/);
+  assert.match(timeoutWrapper, /import productionWorker from "\.\/v7-production-entry\.js"/);
+  assert.match(timeoutWrapper, /productionWorker\.fetch\(request, env, ctx\)/);
   assert.match(wrangler, /"ALLOWED_COUNTRIES": "ES"/);
   assert.match(wrangler, /"MOBILE_ONLY": "true"/);
   assert.match(wrangler, /"REDIRECT_ENFORCING": "true"/);

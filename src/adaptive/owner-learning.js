@@ -4,6 +4,10 @@ import {
   insertAdaptiveFeedback,
   rebuildAdaptiveReputation,
 } from "../storage/adaptive-d1.js";
+import {
+  clearOwnerConfirmation,
+  getOwnerConfirmationState,
+} from "./owner-learning-timeout.js";
 
 function looksLikeEventId(value) {
   return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
@@ -21,6 +25,18 @@ export async function recordOwnerHumanConfirmed(db, eventId, nowMs = Date.now())
   }
 
   try {
+    // New OWNER_LEARNING_MODE observations have a 3-minute confirmation row.
+    // Once that deadline has passed, IT'S ME is no longer accepted even if the
+    // once-per-minute timeout sweep has not fired yet.
+    const confirmation = await getOwnerConfirmationState(db, eventId, nowMs);
+    if (confirmation?.expired) {
+      return {
+        learned: false,
+        reason: "confirmation_expired",
+        deadlineMs: confirmation.deadlineMs,
+      };
+    }
+
     const context = await getAdaptiveEventContext(db, eventId);
     if (!context) return { learned: false, reason: "event_not_found" };
 
@@ -33,6 +49,9 @@ export async function recordOwnerHumanConfirmed(db, eventId, nowMs = Date.now())
 
     const existing = await getAdaptiveFeedbackForEvent(db, eventId);
     if (existing) {
+      if (existing.label === "human_confirmed") {
+        await clearOwnerConfirmation(db, eventId);
+      }
       return {
         learned: false,
         reason: "feedback_already_exists",
@@ -73,6 +92,8 @@ export async function recordOwnerHumanConfirmed(db, eventId, nowMs = Date.now())
         nowMs,
       });
     }
+
+    await clearOwnerConfirmation(db, eventId);
 
     return {
       learned: true,
