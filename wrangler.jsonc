@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "v7-adaptive-learning",
-  "main": "src/m22-policy-enforcing-entry.js",
+  "main": "src/v7-production-entry.js",
   "compatibility_date": "2026-08-29",
 
   "vars": {
@@ -28,8 +28,7 @@
     "PROBE_TOKEN_TTL_MS": "90000",
     "BLOCK_TTL_SECONDS": "1800",
     "PRESERVE_PATH": "false",
-    "ORIGIN_URL": "https://DESTINATIA-TA.com/",
-    "BLOCK_URL": "https://SITE-REAL-PE-CARE-IL-CONTROLEZI.com/"
+    "REDIRECT_ENFORCING": "true"
   },
 
   "ai": {
