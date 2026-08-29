@@ -1,0 +1,16 @@
+{
+  "name": "v7-adaptive-learning",
+  "version": "7.0.0-dev.1",
+  "private": true,
+  "type": "module",
+  "description": "Adaptive AI anti-bot system for Cloudflare Workers",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "d1:migrate:local": "wrangler d1 migrations apply DB --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply DB --remote"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

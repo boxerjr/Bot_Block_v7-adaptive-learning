@@ -1,0 +1,58 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "v7-adaptive-learning",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-29",
+
+  "vars": {
+    "ALLOWED_COUNTRIES": "ES",
+    "MOBILE_ONLY": "true",
+    "HUMANS_ONLY": "true",
+    "AI_ENABLED": "true",
+    "AI_MODE": "all",
+    "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "AI_DUAL_REVIEW": "true",
+    "AI_LOG_ON_HARD_BLOCK": "true",
+    "AI_BLOCK_THRESHOLD": "68",
+    "AI_MIN_CLASSIFICATION_CONFIDENCE": "60",
+    "AI_CRITIC_MIN_CONFIDENCE": "70",
+    "AI_BOT_BLOCK_PROBABILITY": "80",
+    "AI_SPOOF_BLOCK_PROBABILITY": "78",
+    "AI_FAIL_CLOSED": "false",
+    "AI_REVIEW_MIN_RISK": "8",
+    "LOCAL_HARD_BLOCK_THRESHOLD": "88",
+    "AGGRESSIVE_MODE": "true",
+    "SILENT_DELAY_MS": "350",
+    "RATE_LIMIT_PER_MIN": "12",
+    "VERIFIED_COOKIE_TTL": "900",
+    "PROBE_TOKEN_TTL_MS": "90000",
+    "BLOCK_TTL_SECONDS": "1800",
+    "PRESERVE_PATH": "false",
+    "ORIGIN_URL": "https://DESTINATIA-TA.com/",
+    "BLOCK_URL": "https://SITE-REAL-PE-CARE-IL-CONTROLEZI.com/"
+  },
+
+  "ai": {
+    "binding": "AI"
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "v7-adaptive-learning",
+      "database_id": "cbc40c25-cb43-4bd1-bb7c-b7963b7425c7",
+      "migrations_dir": "migrations"
+    }
+  ]
+
+  /*
+  Add after creating the R2 resource:
+
+  ,"r2_buckets": [
+    {
+      "binding": "DATASET",
+      "bucket_name": "v7-adaptive-dataset"
+    }
+  ]
+  */
+}

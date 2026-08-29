@@ -1,0 +1,30 @@
+export function buildEvent({
+  installationId = null,
+  requestId = crypto.randomUUID(),
+  network = {},
+  local = {},
+  ai1 = null,
+  ai2 = null,
+  decision = "unknown",
+  finalReasons = [],
+  telemetrySummary = {},
+}) {
+  return {
+    schema_version: 1,
+    event_id: requestId,
+    installation_id: installationId,
+    observed_at: new Date().toISOString(),
+    country: network.country || null,
+    asn: network.asn || null,
+    organization: network.org || null,
+    local_risk: Number(local.risk || 0),
+    spoof_signals: Number(local.spoofSignals || 0),
+    strong_hardware_spoof: !!local.strongHardwareSpoof,
+    local_reasons: Array.isArray(local.reasons) ? local.reasons.slice(0, 32) : [],
+    ai1,
+    ai2,
+    final_decision: decision,
+    final_reasons: Array.isArray(finalReasons) ? finalReasons.slice(0, 32) : [],
+    telemetry_summary: telemetrySummary,
+  };
+}
