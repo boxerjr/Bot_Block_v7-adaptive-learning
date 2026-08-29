@@ -13,8 +13,10 @@ import {
 import {
   buildTelegramEventIpKeyCallbackKeyboard,
   buildTelegramIpKeyCallbackKeyboard,
+  buildTelegramOwnerLearningKeyboard,
   ensureTelegramWebhook,
 } from "./adaptive/telegram-callback.js";
+import { ownerLearningEnabled } from "./adaptive/owner-learning.js";
 import { buildTelegramDecisionMessage } from "./adaptive/telegram.js";
 
 function waitUntil(ctx, promise) {
@@ -107,25 +109,55 @@ function rebuildPolicy(data = {}) {
   };
 }
 
-async function buildFinalTelegramControl(request, env, state = "unblocked", eventId = null) {
+function isHumanPassVerdict(monitorVerdict = {}) {
+  const classification = String(monitorVerdict.classification || "");
+  return monitorVerdict.decision === "allow" && classification.startsWith("human_");
+}
+
+async function buildFinalTelegramControl(
+  request,
+  env,
+  state = "unblocked",
+  eventId = null,
+  ownerHumanPass = false
+) {
   if (!env?.DB || !env?.CHALLENGE_SECRET || !env?.TELEGRAM_TOKEN || !env?.TELEGRAM_CHAT_ID) {
-    return { keyboard: null, ipKey: null, webhookConfigured: false, eventBound: false };
+    return {
+      keyboard: null,
+      ipKey: null,
+      webhookConfigured: false,
+      eventBound: false,
+      ownerLearningButtons: false,
+    };
   }
 
   try {
     const ipKey = await deriveManualIpKey(env.CHALLENGE_SECRET, clientIp(request));
     if (!ipKey) {
-      return { keyboard: null, ipKey: null, webhookConfigured: false, eventBound: false };
+      return {
+        keyboard: null,
+        ipKey: null,
+        webhookConfigured: false,
+        eventBound: false,
+        ownerLearningButtons: false,
+      };
     }
 
     let keyboard = null;
     let eventBound = false;
+    let ownerLearningButtons = false;
 
-    // Preferred production control: callback_data carries both a signed compact
-    // event reference and the signed exact-IP HMAC. No event->IP D1 mapping is
-    // required, so operator feedback remains learnable even if that mapping path
-    // is unavailable.
-    if (eventId) {
+    if (ownerHumanPass && eventId && state !== "blocked") {
+      keyboard = await buildTelegramOwnerLearningKeyboard(
+        env.CHALLENGE_SECRET,
+        eventId,
+        ipKey
+      );
+      eventBound = !!keyboard;
+      ownerLearningButtons = !!keyboard;
+    }
+
+    if (!keyboard && eventId) {
       keyboard = await buildTelegramEventIpKeyCallbackKeyboard(
         env.CHALLENGE_SECRET,
         eventId,
@@ -135,8 +167,6 @@ async function buildFinalTelegramControl(request, env, state = "unblocked", even
       eventBound = !!keyboard;
     }
 
-    // Reliability fallback: exact-IP block/unblock still works even when an
-    // event cannot be represented. In that case no learning label is guessed.
     if (!keyboard) {
       keyboard = await buildTelegramIpKeyCallbackKeyboard(
         env.CHALLENGE_SECRET,
@@ -151,15 +181,32 @@ async function buildFinalTelegramControl(request, env, state = "unblocked", even
       webhookConfigured = webhook.configured === true;
     } catch {}
 
-    return { keyboard, ipKey, webhookConfigured, eventBound };
+    return {
+      keyboard,
+      ipKey,
+      webhookConfigured,
+      eventBound,
+      ownerLearningButtons,
+    };
   } catch {
-    return { keyboard: null, ipKey: null, webhookConfigured: false, eventBound: false };
+    return {
+      keyboard: null,
+      ipKey: null,
+      webhookConfigured: false,
+      eventBound: false,
+      ownerLearningButtons: false,
+    };
   }
 }
 
 async function sendFinalTelegram(request, env, ctx, data) {
   if (!env?.TELEGRAM_TOKEN || !env?.TELEGRAM_CHAT_ID) {
-    return { keyboardReady: false, webhookConfigured: false, eventBound: false };
+    return {
+      keyboardReady: false,
+      webhookConfigured: false,
+      eventBound: false,
+      ownerLearningButtons: false,
+    };
   }
 
   const v63Decision = rebuildDecision(data);
@@ -203,16 +250,21 @@ async function sendFinalTelegram(request, env, ctx, data) {
   const alreadyBlocked = currentIpKey
     ? await isManualIpBlocked(env.DB, currentIpKey)
     : false;
+  const ownerHumanPass = ownerLearningEnabled(env) && isHumanPassVerdict(monitorVerdict);
   const control = await buildFinalTelegramControl(
     request,
     env,
     alreadyBlocked ? "blocked" : "unblocked",
-    data.event_id || null
+    data.event_id || null,
+    ownerHumanPass
   );
+
   const manualLine = control.keyboard
-    ? control.eventBound
-      ? "ManualIPControl: exact IP — operator feedback learning active"
-      : "ManualIPControl: exact IP — Telegram callback BLOCK / UNBLOCK"
+    ? control.ownerLearningButtons
+      ? "OwnerLearning: HUMAN_PASS confirmation — IT'S ME / NOT ME"
+      : control.eventBound
+        ? "ManualIPControl: exact IP — operator feedback learning active"
+        : "ManualIPControl: exact IP — Telegram callback BLOCK / UNBLOCK"
     : "ManualIPControl: unavailable";
 
   waitUntil(
@@ -228,6 +280,7 @@ async function sendFinalTelegram(request, env, ctx, data) {
     keyboardReady: !!control.keyboard,
     webhookConfigured: control.webhookConfigured,
     eventBound: control.eventBound,
+    ownerLearningButtons: control.ownerLearningButtons,
   };
 }
 
@@ -263,6 +316,11 @@ async function enrichHealth(request, env, ctx) {
       v7_operator_feedback_eventref_callback: true,
       v7_operator_block_allow_label: "false_negative",
       v7_operator_feedback_public_training_eligible: false,
+      v7_owner_learning_mode: ownerLearningEnabled(env),
+      v7_owner_learning_human_confirm_label: "human_confirmed",
+      v7_owner_learning_not_me_label: "false_negative",
+      v7_owner_learning_requires_click: true,
+      v7_owner_learning_public_training_eligible: false,
       v7_redirect_country_block: "BLOCK_URL_OR_404_FALLBACK",
       v7_redirect_device_block: "BLOCK_URL_OR_404_FALLBACK",
       v7_redirect_manual_ip_block: "BLOCK_URL_OR_404_FALLBACK",
@@ -350,6 +408,9 @@ async function handleFinalSubmit(request, env, ctx) {
       manual_ip_control_event_bound: telegram.eventBound,
       manual_ip_control_exact_ip: true,
       manual_ip_callback_opens_browser: false,
+      owner_learning_mode: ownerLearningEnabled(env),
+      owner_learning_buttons: telegram.ownerLearningButtons,
+      owner_learning_requires_click: true,
       redirect_enforcing: route.enabled,
       redirect_action: route.action,
       redirect_reason: route.reason,
