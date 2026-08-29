@@ -9,6 +9,16 @@ import { runV63FullShadowDecision } from "./compat/v63/full-shadow.js";
 const VERSION = "V7.0_M1_SHADOW";
 const BASELINE = "V6.3_SILENT_AI";
 
+function adminAuthorized(request, env) {
+  const direct = request.headers.get("x-admin-secret") || "";
+  const auth = request.headers.get("authorization") || "";
+  const bearer = auth.toLowerCase().startsWith("bearer ")
+    ? auth.slice(7).trim()
+    : "";
+  const supplied = direct || bearer;
+  return !!env.ADMIN_SECRET && supplied === env.ADMIN_SECRET;
+}
+
 function compactFingerprint(fp) {
   return {
     recentNetworks: Number(fp?.recentNetworks || 0),
@@ -51,6 +61,188 @@ function compactAi(ai) {
     hard_local_block: !!ai.hardLocalBlock,
     error: ai.error || null,
   };
+}
+
+function fullDiagnosticProfile(name) {
+  const ua =
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36";
+
+  if (name === "spoof_mobile") {
+    return {
+      ua,
+      headers: {
+        "user-agent": ua,
+        "sec-ch-ua-mobile": "?1",
+        "sec-ch-ua-platform": '"Android"',
+        "accept-language": "es-ES,es;q=0.9,en;q=0.8",
+      },
+      network: {
+        country: "ES",
+        asn: "AS14593",
+        org: "M1 synthetic safe ASN",
+        httpProtocol: "HTTP/3",
+        tlsVersion: "TLSv1.3",
+        bot: {},
+      },
+      telemetry: {
+        navigator: {
+          userAgent: ua,
+          platform: "Win32",
+          vendor: "Google Inc.",
+          maxTouchPoints: 0,
+          hardwareConcurrency: 32,
+          deviceMemory: 8,
+          webdriver: false,
+        },
+        uaData: {
+          present: true,
+          mobile: false,
+          platform: "Windows",
+          architecture: "x86_64",
+        },
+        media: {
+          pointerFine: true,
+          pointerCoarse: false,
+          anyHoverHover: true,
+        },
+        webgl: {
+          vendor: "NVIDIA Corporation",
+          renderer: "NVIDIA GeForce RTX 4090",
+        },
+        webgpu: {
+          vendor: "NVIDIA",
+          description: "NVIDIA GeForce RTX 4090",
+          architecture: "x86_64",
+        },
+        automation: {
+          selenium: false,
+          phantom: false,
+          nightmare: false,
+          webdriverAttr: false,
+          cdc: false,
+        },
+      },
+      syntheticIp: "198.51.100.20",
+    };
+  }
+
+  return {
+    ua,
+    headers: {
+      "user-agent": ua,
+      "sec-ch-ua-mobile": "?1",
+      "sec-ch-ua-platform": '"Android"',
+      "accept-language": "es-ES,es;q=0.9,en;q=0.8",
+    },
+    network: {
+      country: "ES",
+      asn: "AS14593",
+      org: "M1 synthetic safe ASN",
+      httpProtocol: "HTTP/3",
+      tlsVersion: "TLSv1.3",
+      bot: {},
+    },
+    telemetry: {
+      navigator: {
+        userAgent: ua,
+        platform: "Linux armv8l",
+        vendor: "Google Inc.",
+        maxTouchPoints: 5,
+        hardwareConcurrency: 8,
+        deviceMemory: 8,
+        webdriver: false,
+      },
+      uaData: {
+        present: true,
+        mobile: true,
+        platform: "Android",
+        architecture: "arm",
+      },
+      media: {
+        pointerFine: false,
+        pointerCoarse: true,
+        anyHoverHover: false,
+      },
+      webgl: {
+        vendor: "Qualcomm",
+        renderer: "Adreno 750",
+      },
+      webgpu: {
+        vendor: "Qualcomm",
+        description: "Adreno 750",
+        architecture: "arm",
+      },
+      automation: {
+        selenium: false,
+        phantom: false,
+        nightmare: false,
+        webdriverAttr: false,
+        cdc: false,
+      },
+    },
+    syntheticIp: "198.51.100.10",
+  };
+}
+
+async function handleFullDiagnostic(request, env) {
+  if (request.method !== "POST") {
+    return Response.json({ error: "method_not_allowed" }, { status: 405 });
+  }
+  if (!adminAuthorized(request, env)) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  let body = {};
+  try {
+    body = await request.json();
+  } catch {}
+
+  const profileName = body?.profile === "spoof_mobile"
+    ? "spoof_mobile"
+    : "human_mobile";
+  const profile = fullDiagnosticProfile(profileName);
+  const syntheticRequest = new Request(request.url, {
+    method: "GET",
+    headers: profile.headers,
+  });
+
+  const decision = await runV63FullShadowDecision({
+    request: syntheticRequest,
+    env,
+    network: profile.network,
+    ip: profile.syntheticIp,
+    ua: profile.ua,
+    telemetry: profile.telemetry,
+    targetPath: "/",
+  });
+
+  return Response.json({
+    status: "v63_full_shadow_diagnostic",
+    version: VERSION,
+    baseline: BASELINE,
+    enforcing: false,
+    dataset_eligible: false,
+    profile: profileName,
+    final_decision: decision.finalDecision,
+    would_block: decision.finalDecision === "block",
+    decision_stage: decision.decisionStage,
+    final_reasons: decision.finalReasons,
+    early_rules: compactEarly(decision.early),
+    device_gate: compactGate(decision.deviceGate),
+    fingerprint: compactFingerprint(decision.fingerprint),
+    local: {
+      risk: Number(decision.local?.risk || 0),
+      spoofSignals: Number(decision.local?.spoofSignals || 0),
+      strongHardwareSpoof: !!decision.local?.strongHardwareSpoof,
+      critical: !!decision.local?.critical,
+      reasons: Array.isArray(decision.local?.reasons) ? decision.local.reasons : [],
+    },
+    ai: compactAi(decision.ai),
+    persisted_event: false,
+    raw_ip_stored: false,
+    user_agent_stored: false,
+    raw_telemetry_stored: false,
+  });
 }
 
 async function handleFullBrowserSubmit(request, env) {
@@ -204,6 +396,7 @@ async function healthWithFullFlag(request, env, ctx) {
       {
         ...data,
         v63_full_shadow_decision_ready: true,
+        v63_full_shadow_diagnostic_ready: true,
       },
       {
         status: response.status,
@@ -225,6 +418,10 @@ export default {
 
     if (url.pathname === "/_shadow/browser-probe-submit") {
       return handleFullBrowserSubmit(request, env);
+    }
+
+    if (url.pathname === "/_shadow/v63-full-test") {
+      return handleFullDiagnostic(request, env);
     }
 
     return previousWorker.fetch(request, env, ctx);
