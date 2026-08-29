@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { checkMonitorRateLimit } from "../src/adaptive/monitor-rate-limit.js";
 import {
+  checkMonitorRateLimit,
+  clearMonitorRateLimitForIpKey,
+} from "../src/adaptive/monitor-rate-limit.js";
+import {
+  clearManualIpBlocked,
   deriveManualIpKey,
   isManualIpBlocked,
 } from "../src/adaptive/manual-ip-block.js";
@@ -48,6 +52,20 @@ function fakeDb() {
                   expires_at_ms: Number(expiresAt),
                   consumed_at_ms: consumedAt == null ? null : Number(consumedAt),
                 });
+                return { success: true };
+              }
+
+              if (statement.includes("DELETE FROM adaptive_live_capture_sessions") && statement.includes("WHERE sid = ?")) {
+                rows.delete(String(args[0] || ""));
+                return { success: true };
+              }
+
+              if (statement.includes("DELETE FROM adaptive_live_capture_sessions") && statement.includes("WHERE sid GLOB ?")) {
+                const pattern = String(args[0] || "");
+                const prefix = pattern.endsWith("*") ? pattern.slice(0, -1) : pattern;
+                for (const sid of [...rows.keys()]) {
+                  if (sid.startsWith(prefix)) rows.delete(sid);
+                }
                 return { success: true };
               }
 
@@ -130,4 +148,41 @@ test("first three requests pass and fourth auto-blocks only the exact IP", async
   const otherKey = await deriveManualIpKey(secret, otherIp);
   assert.notEqual(otherKey, ipKey);
   assert.equal(await isManualIpBlocked(db, otherKey, base + 4), false);
+});
+
+test("unblock clears both block row and old counters so access is really restored", async () => {
+  const db = fakeDb();
+  const secret = "rate-limit-test-secret";
+  const ip = "198.51.100.20";
+  const base = 1_800_000_100_000;
+
+  for (let i = 0; i < 4; i++) {
+    await checkMonitorRateLimit({
+      db,
+      secret,
+      ip,
+      limit: 3,
+      windowMs: 60_000,
+      nowMs: base + i,
+    });
+  }
+
+  const ipKey = await deriveManualIpKey(secret, ip);
+  assert.equal(await isManualIpBlocked(db, ipKey, base + 5), true);
+
+  assert.equal(await clearManualIpBlocked(db, ipKey), true);
+  assert.equal(await clearMonitorRateLimitForIpKey(db, ipKey), true);
+  assert.equal(await isManualIpBlocked(db, ipKey, base + 6), false);
+
+  const afterUnblock = await checkMonitorRateLimit({
+    db,
+    secret,
+    ip,
+    limit: 3,
+    windowMs: 60_000,
+    nowMs: base + 6,
+  });
+  assert.equal(afterUnblock.allowed, true);
+  assert.equal(afterUnblock.count, 1);
+  assert.equal(afterUnblock.autoBlocked, false);
 });
