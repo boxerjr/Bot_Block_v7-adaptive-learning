@@ -28,7 +28,8 @@
     "PROBE_TOKEN_TTL_MS": "90000",
     "BLOCK_TTL_SECONDS": "1800",
     "PRESERVE_PATH": "false",
-    "REDIRECT_ENFORCING": "true"
+    "REDIRECT_ENFORCING": "true",
+    "OWNER_LEARNING_MODE": "false"
   },
 
   "ai": {
