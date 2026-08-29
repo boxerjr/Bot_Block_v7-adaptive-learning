@@ -9,6 +9,13 @@ function isMonitorPage(pathname) {
   return pathname === "/" || pathname === "" || pathname === "/check" || pathname === "/check/";
 }
 
+function silentRedirectShell(html) {
+  const silentHead = `<style id="v7-silent-redirect-style">html.v7-silent-redirect,html.v7-silent-redirect body{margin:0!important;min-height:100%;background:#fff!important;overflow:hidden!important}html.v7-silent-redirect body>*:not(script){display:none!important}</style><script>document.documentElement.classList.add("v7-silent-redirect");setTimeout(()=>document.documentElement.classList.remove("v7-silent-redirect"),4000);</script>`;
+  return html
+    .replace("<title>V7 Public Traffic Monitor</title>", "<title></title>")
+    .replace("</head>", `${silentHead}</head>`);
+}
+
 async function enrichHealth(request, env, ctx) {
   const response = await policyWorker.fetch(request, env, ctx);
   let data;
@@ -30,6 +37,7 @@ async function enrichHealth(request, env, ctx) {
       v7_block_url_configured: state.blockConfigured,
       v7_origin_redirect_enabled: state.originEnabled,
       v7_block_redirect_enabled: state.blockEnabled,
+      v7_silent_probe_enabled: state.originEnabled && state.blockEnabled,
       v7_redirect_country_block: "BLOCK_URL_OR_404_FALLBACK",
       v7_redirect_device_block: "BLOCK_URL_OR_404_FALLBACK",
       v7_redirect_manual_ip_block: "BLOCK_URL_OR_404_FALLBACK",
@@ -41,7 +49,7 @@ async function enrichHealth(request, env, ctx) {
   );
 }
 
-async function injectRedirectClient(response) {
+async function injectRedirectClient(response, env) {
   const contentType = response.headers.get("content-type") || "";
   if (!response.ok || !contentType.includes("text/html")) return response;
 
@@ -57,7 +65,11 @@ async function injectRedirectClient(response) {
     return new Response(html, { status: response.status, headers: response.headers });
   }
 
-  const injected = `${marker}\n      if (response.ok && data && data.redirect_enforcing === true && typeof data.redirect_url === \"string\" && data.redirect_url) {\n        const state = document.getElementById(\"state\");\n        if (state) state.textContent = \"Redirecting…\";\n        window.location.replace(data.redirect_url);\n        return;\n      }`;
+  const state = redirectState(env);
+  const silentReady = state.originEnabled && state.blockEnabled;
+  if (silentReady) html = silentRedirectShell(html);
+
+  const injected = `${marker}\n      if (response.ok && data && data.redirect_enforcing === true && typeof data.redirect_url === \"string\" && data.redirect_url) {\n        window.location.replace(data.redirect_url);\n        return;\n      }\n      document.documentElement.classList.remove(\"v7-silent-redirect\");`;
 
   const headers = new Headers(response.headers);
   headers.set("cache-control", "no-store");
@@ -80,7 +92,7 @@ async function handleMonitorPage(request, env, ctx) {
     if (redirected) return redirected;
   }
 
-  return injectRedirectClient(response);
+  return injectRedirectClient(response, env);
 }
 
 async function handleFinalSubmit(request, env, ctx) {

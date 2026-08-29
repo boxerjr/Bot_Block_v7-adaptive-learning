@@ -156,6 +156,17 @@ test("server redirect has loop guard and no-store headers", () => {
   assert.equal(loop, null);
 });
 
+test("production probe UI stays hidden while fully configured redirects are evaluating", () => {
+  assert.match(production, /function silentRedirectShell/);
+  assert.match(production, /v7-silent-redirect/);
+  assert.match(production, /body>\*:not\(script\)\{display:none!important\}/);
+  assert.match(production, /setTimeout\(\(\)=>document\.documentElement\.classList\.remove\("v7-silent-redirect"\),4000\)/);
+  assert.match(production, /state\.originEnabled && state\.blockEnabled/);
+  assert.match(production, /v7_silent_probe_enabled/);
+  assert.match(production, /injectRedirectClient\(response, env\)/);
+  assert.match(production, /document\.documentElement\.classList\.remove\("v7-silent-redirect"\)/);
+});
+
 test("production wrapper redirects after browser probe and wrangler exposes no target URLs", () => {
   assert.match(production, /window\.location\.replace\(data\.redirect_url\)/);
   assert.match(production, /chooseFinalRedirect/);
