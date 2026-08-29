@@ -14,6 +14,10 @@ const policyWrapper = readFileSync(
   new URL("../src/m22-policy-enforcing-entry.js", import.meta.url),
   "utf8"
 );
+const production = readFileSync(
+  new URL("../src/v7-production-entry.js", import.meta.url),
+  "utf8"
+);
 const deepHelper = readFileSync(
   new URL("../src/adaptive/monitor-deep-inspection.js", import.meta.url),
   "utf8"
@@ -79,7 +83,7 @@ test("public check has privacy-preserving anti-flood limiter", () => {
   assert.doesNotMatch(rateLimit, /INSERT[^;]*raw_ip/i);
 });
 
-test("deep monitor remains excluded from training while explicit policy gates enforce", () => {
+test("deep monitor stays excluded from training while production wrapper owns redirect enforcement", () => {
   assert.match(source, /dataset_eligible: false/);
   assert.match(source, /training_eligible: false/);
   assert.match(source, /enforcing: false/);
@@ -89,12 +93,14 @@ test("deep monitor remains excluded from training while explicit policy gates en
   assert.match(source, /raw_telemetry_stored: false/);
   assert.match(operational, /dataset_eligible: false/);
   assert.match(operational, /training_eligible: false/);
-  assert.match(policyWrapper, /m22_ai_bot_enforcing: false/);
   assert.match(policyWrapper, /m22_mobile_only_desktop_enforcing/);
+  assert.match(production, /redirect_enforcing/);
+  assert.match(production, /v7_redirect_enforcing/);
 });
 
-test("wrangler routes preview through policy-enforcing public monitor", () => {
-  assert.match(wrangler, /"main": "src\/m22-policy-enforcing-entry\.js"/);
+test("wrangler routes production through V7 redirect entry", () => {
+  assert.match(wrangler, /"main": "src\/v7-production-entry\.js"/);
   assert.match(wrangler, /"ALLOWED_COUNTRIES": "ES"/);
   assert.match(wrangler, /"MOBILE_ONLY": "true"/);
+  assert.match(wrangler, /"REDIRECT_ENFORCING": "true"/);
 });
