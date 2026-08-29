@@ -3,6 +3,7 @@ import {
   getEventIpKey,
   setManualIpBlocked,
 } from "./manual-ip-block.js";
+import { clearMonitorRateLimitForIpKey } from "./monitor-rate-limit.js";
 
 function bytesToB64url(bytes) {
   let binary = "";
@@ -42,6 +43,10 @@ function safeEqual(a, b) {
   return diff === 0;
 }
 
+function validIpKey(ipKey) {
+  return /^m22ip_[A-Za-z0-9_-]{32}$/.test(String(ipKey || ""));
+}
+
 async function telegramApi(env, method, payload) {
   if (!env?.TELEGRAM_TOKEN) return { ok: false, reason: "telegram_not_bound" };
   try {
@@ -65,11 +70,31 @@ async function callbackData(secret, eventId, action) {
   return `m22:${code}:${event}:${sig}`;
 }
 
+async function ipKeyCallbackData(secret, ipKey, action) {
+  const code = action === "block" ? "b" : "u";
+  const key = String(ipKey || "");
+  if (!validIpKey(key)) return null;
+  const keyPart = key.slice("m22ip_".length);
+  const sig = await hmacShort(secret, `m22-ipkey-callback:${code}:${key}`, 10);
+  return `m22k:${code}:${keyPart}:${sig}`;
+}
+
 export async function parseTelegramIpCallback(secret, data) {
   const value = String(data || "");
-  const match = value.match(/^m22:([bu]):([0-9a-fA-F-]{36}):([A-Za-z0-9_-]{12})$/);
-  if (!match || !secret) return null;
-  const [, code, eventId, supplied] = match;
+  if (!secret) return null;
+
+  const direct = value.match(/^m22k:([bu]):([A-Za-z0-9_-]{32}):([A-Za-z0-9_-]{10})$/);
+  if (direct) {
+    const [, code, keyPart, supplied] = direct;
+    const ipKey = `m22ip_${keyPart}`;
+    const expected = await hmacShort(secret, `m22-ipkey-callback:${code}:${ipKey}`, 10);
+    if (!safeEqual(supplied, expected)) return null;
+    return { action: code === "b" ? "block" : "unblock", ipKey };
+  }
+
+  const legacy = value.match(/^m22:([bu]):([0-9a-fA-F-]{36}):([A-Za-z0-9_-]{12})$/);
+  if (!legacy) return null;
+  const [, code, eventId, supplied] = legacy;
   const expected = await hmacShort(secret, `m22-callback:${code}:${eventId}`, 12);
   if (!safeEqual(supplied, expected)) return null;
   return { action: code === "b" ? "block" : "unblock", eventId };
@@ -87,6 +112,22 @@ export async function buildTelegramCallbackKeyboard(secret, eventId, state = "un
   return {
     inline_keyboard: [[
       { text: "🚫 BLOCK IP", callback_data: await callbackData(secret, eventId, "block") },
+    ]],
+  };
+}
+
+export async function buildTelegramIpKeyCallbackKeyboard(secret, ipKey, state = "blocked") {
+  if (!secret || !validIpKey(ipKey)) return null;
+  if (state === "blocked") {
+    return {
+      inline_keyboard: [[
+        { text: "🔓 UNBLOCK IP", callback_data: await ipKeyCallbackData(secret, ipKey, "unblock") },
+      ]],
+    };
+  }
+  return {
+    inline_keyboard: [[
+      { text: "🚫 BLOCK IP", callback_data: await ipKeyCallbackData(secret, ipKey, "block") },
     ]],
   };
 }
@@ -142,12 +183,12 @@ export async function ensureTelegramWebhook(env, requestUrl, nowMs = Date.now())
   return { ready: true, configured: true, cached: false, origin };
 }
 
-async function answerCallback(env, callbackId, text) {
+async function answerCallback(env, callbackId, text, showAlert = false) {
   if (!callbackId) return;
   await telegramApi(env, "answerCallbackQuery", {
     callback_query_id: callbackId,
     text: String(text).slice(0, 180),
-    show_alert: false,
+    show_alert: !!showAlert,
   });
 }
 
@@ -178,31 +219,43 @@ export async function handleTelegramCallbackWebhook(request, env) {
 
   const parsed = await parseTelegramIpCallback(env.CHALLENGE_SECRET, cb.data || "");
   if (!parsed) {
-    await answerCallback(env, cb.id, "Invalid or expired action");
+    await answerCallback(env, cb.id, "Invalid or expired action", true);
     return new Response("OK", { status: 200 });
   }
 
-  const ipKey = await getEventIpKey(env.DB, parsed.eventId);
+  const ipKey = parsed.ipKey || await getEventIpKey(env.DB, parsed.eventId);
   if (!ipKey) {
-    await answerCallback(env, cb.id, "Event IP mapping expired");
+    await answerCallback(env, cb.id, "Exact-IP mapping is unavailable", true);
     return new Response("OK", { status: 200 });
   }
 
-  const success = parsed.action === "block"
-    ? await setManualIpBlocked(env.DB, ipKey, parsed.eventId)
-    : await clearManualIpBlocked(env.DB, ipKey);
+  let success = false;
+  let countersCleared = true;
+  if (parsed.action === "block") {
+    success = await setManualIpBlocked(env.DB, ipKey, parsed.eventId || "telegram_direct");
+  } else {
+    success = await clearManualIpBlocked(env.DB, ipKey);
+    if (success) {
+      countersCleared = await clearMonitorRateLimitForIpKey(env.DB, ipKey);
+    }
+  }
 
-  if (!success) {
-    await answerCallback(env, cb.id, "IP action failed");
+  if (!success || !countersCleared) {
+    await answerCallback(env, cb.id, "IP action failed — try again", true);
     return new Response("OK", { status: 200 });
   }
 
   const blocked = parsed.action === "block";
   const confirmation = blocked
     ? "✅ IP BLOCKED\nExact IP only\nRaw IP stored: false"
-    : "✅ IP UNBLOCKED\nExact IP only\nRaw IP stored: false";
+    : "✅ IP UNBLOCKED\nExact IP only\nRate-limit counters reset: true\nRaw IP stored: false";
 
-  await answerCallback(env, cb.id, blocked ? "✅ IP BLOCKED — Exact IP only" : "✅ IP UNBLOCKED — Exact IP only");
+  await answerCallback(
+    env,
+    cb.id,
+    blocked ? "✅ IP BLOCKED — Exact IP only" : "✅ IP UNBLOCKED — access restored",
+    true
+  );
 
   await telegramApi(env, "sendMessage", {
     chat_id: String(env.TELEGRAM_CHAT_ID),
@@ -210,13 +263,19 @@ export async function handleTelegramCallbackWebhook(request, env) {
     disable_web_page_preview: true,
   });
 
-  const nextKeyboard = await buildTelegramCallbackKeyboard(
-    env.CHALLENGE_SECRET,
-    parsed.eventId,
-    blocked ? "blocked" : "unblocked"
-  );
+  const nextKeyboard = parsed.ipKey
+    ? await buildTelegramIpKeyCallbackKeyboard(
+        env.CHALLENGE_SECRET,
+        ipKey,
+        blocked ? "blocked" : "unblocked"
+      )
+    : await buildTelegramCallbackKeyboard(
+        env.CHALLENGE_SECRET,
+        parsed.eventId,
+        blocked ? "blocked" : "unblocked"
+      );
 
-  if (cb?.message?.message_id) {
+  if (cb?.message?.message_id && nextKeyboard) {
     await telegramApi(env, "editMessageReplyMarkup", {
       chat_id: String(env.TELEGRAM_CHAT_ID),
       message_id: cb.message.message_id,

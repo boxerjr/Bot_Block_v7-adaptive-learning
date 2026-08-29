@@ -4,6 +4,22 @@ import {
   setManualIpBlocked,
 } from "./manual-ip-block.js";
 
+export async function clearMonitorRateLimitForIpKey(db, ipKey) {
+  if (!db || !ipKey) return false;
+  try {
+    await db
+      .prepare(
+        `DELETE FROM adaptive_live_capture_sessions
+         WHERE sid GLOB ?`
+      )
+      .bind(`m22rl_${String(ipKey)}_*`)
+      .run();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Exact-IP public monitor limiter.
  *
