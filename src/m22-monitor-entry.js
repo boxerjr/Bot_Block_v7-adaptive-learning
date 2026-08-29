@@ -5,6 +5,7 @@ import { deriveAdaptiveFingerprintId } from "./adaptive/fingerprint-id.js";
 import { sanitizeLiveFeatureSummary } from "./adaptive/live-features.js";
 import { monitorBrowserProbeHtml } from "./adaptive/monitor-probe.js";
 import { issueMonitorToken, verifyMonitorToken } from "./adaptive/monitor-token.js";
+import { runMonitorDeepInspection } from "./adaptive/monitor-deep-inspection.js";
 import {
   buildTelegramDecisionMessage,
   buildTelegramHitMessage,
@@ -16,7 +17,6 @@ import {
   decayStoredReputation,
 } from "./adaptive/reputation.js";
 import { evaluateV63EarlyRules } from "./compat/v63/preflight.js";
-import { runV63FullShadowDecision } from "./compat/v63/full-shadow.js";
 import {
   adaptiveSchemaReady,
   getAdaptiveReputations,
@@ -94,6 +94,18 @@ function compactReputation(rep) {
     evidence_weight: Number(rep.evidenceWeight || 0),
     feedback_count: Number(rep.feedbackCount || 0),
     observation_count: Number(rep.observationCount || 0),
+  };
+}
+
+function compactPolicy(decision) {
+  const policy = decision?.policyBaseline || {};
+  return {
+    final_decision: policy.finalDecision || "unknown",
+    would_block: !!policy.wouldBlock,
+    decision_stage: policy.decisionStage || "unknown",
+    reason: policy.reason || null,
+    early_rules: compactEarly(decision?.early),
+    device_gate: compactGate(decision?.deviceGate),
   };
 }
 
@@ -190,6 +202,7 @@ async function healthWithMonitor(request, env, ctx) {
         !!env.CHALLENGE_SECRET && sessionReady && (await adaptiveSchemaReady(env.DB)),
       m22_public_monitor_path: "/check",
       m22_telegram_bound: !!env.TELEGRAM_TOKEN && !!env.TELEGRAM_CHAT_ID,
+      m22_deep_inspection_after_policy_block: true,
       m22_dataset_eligible: false,
       m22_enforcing: false,
       m22_raw_ip_stored: false,
@@ -284,7 +297,7 @@ async function handleMonitorSubmit(request, env, ctx) {
   const network = networkInfo(request);
   const ip = clientIp(request);
 
-  const decision = await runV63FullShadowDecision({
+  const decision = await runMonitorDeepInspection({
     request,
     env,
     network,
@@ -293,6 +306,7 @@ async function handleMonitorSubmit(request, env, ctx) {
     telemetry,
     targetPath: "/",
   });
+  const policyBaseline = compactPolicy(decision);
 
   const event = buildEvent({
     network,
@@ -308,6 +322,7 @@ async function handleMonitorSubmit(request, env, ctx) {
     finalReasons: [
       "shadow_only",
       "public_traffic_monitor",
+      decision.monitorDeepInspection ? "continued_after_policy_block" : "normal_detection_path",
       ...(decision.finalReasons || []),
     ],
     telemetrySummary: {
@@ -317,6 +332,8 @@ async function handleMonitorSubmit(request, env, ctx) {
       scope: "live",
       dataset_eligible: false,
       training_eligible: false,
+      monitor_deep_inspection: !!decision.monitorDeepInspection,
+      policy_baseline: policyBaseline,
       sanitized_feature_summary: sanitizeLiveFeatureSummary({ ua, telemetry }),
       decision_stage: decision.decisionStage,
       early_rules: compactEarly(decision.early),
@@ -402,6 +419,8 @@ async function handleMonitorSubmit(request, env, ctx) {
     decision,
     v7,
     fingerprint: decision.fingerprint,
+    policyBaseline: decision.policyBaseline,
+    monitorDeepInspection: decision.monitorDeepInspection,
   });
   waitUntil(ctx, sendTelegram(env, finalMessage));
 
@@ -420,6 +439,8 @@ async function handleMonitorSubmit(request, env, ctx) {
       r2_written: false,
       adaptive_observation_written: adaptiveWritten,
       telegram_configured: !!env.TELEGRAM_TOKEN && !!env.TELEGRAM_CHAT_ID,
+      policy_baseline: policyBaseline,
+      monitor_deep_inspection: !!decision.monitorDeepInspection,
       final_decision: decision.finalDecision,
       would_block: decision.finalDecision === "block",
       decision_stage: decision.decisionStage,
