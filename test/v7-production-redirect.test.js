@@ -156,15 +156,17 @@ test("server redirect has loop guard and no-store headers", () => {
   assert.equal(loop, null);
 });
 
-test("production probe UI stays hidden while fully configured redirects are evaluating", () => {
+test("production probe UI is strictly invisible while fully configured redirects evaluate", () => {
   assert.match(production, /function silentRedirectShell/);
-  assert.match(production, /v7-silent-redirect/);
+  assert.match(production, /data-v7-silent="1"/);
+  assert.match(production, /visibility:hidden!important/);
+  assert.match(production, /opacity:0!important/);
   assert.match(production, /body>\*:not\(script\)\{display:none!important\}/);
-  assert.match(production, /setTimeout\(\(\)=>document\.documentElement\.classList\.remove\("v7-silent-redirect"\),4000\)/);
+  assert.doesNotMatch(production, /setTimeout\(.*v7-silent/);
+  assert.doesNotMatch(production, /classList\.remove\("v7-silent-redirect"\)/);
   assert.match(production, /state\.originEnabled && state\.blockEnabled/);
-  assert.match(production, /v7_silent_probe_enabled/);
-  assert.match(production, /injectRedirectClient\(response, env\)/);
-  assert.match(production, /document\.documentElement\.classList\.remove\("v7-silent-redirect"\)/);
+  assert.match(production, /v7_silent_probe_strict_hidden/);
+  assert.match(production, /v7_silent_probe_visible_fallback: false/);
 });
 
 test("production wrapper redirects after browser probe and wrangler exposes no target URLs", () => {
@@ -174,6 +176,7 @@ test("production wrapper redirects after browser probe and wrangler exposes no t
   assert.match(production, /BLOCK_URL_OR_404_FALLBACK/);
   assert.match(wrangler, /"main": "src\/v7-production-entry\.js"/);
   assert.match(wrangler, /"REDIRECT_ENFORCING": "true"/);
+  assert.match(wrangler, /"RATE_LIMIT_PER_MIN": "3"/);
   assert.doesNotMatch(wrangler, /"ORIGIN_URL"/);
   assert.doesNotMatch(wrangler, /"BLOCK_URL"/);
 });
