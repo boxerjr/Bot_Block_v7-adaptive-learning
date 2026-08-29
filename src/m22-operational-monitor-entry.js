@@ -26,7 +26,7 @@ function waitUntil(ctx, promise) {
 }
 
 function rateLimitPerMinute(env) {
-  return Math.max(1, Math.min(120, Number(env.RATE_LIMIT_PER_MIN || 12) || 12));
+  return Math.max(1, Math.min(120, Number(env.RATE_LIMIT_PER_MIN || 3) || 3));
 }
 
 function monitorPageRequest(request) {
@@ -95,6 +95,16 @@ function countryAllowed(env, country) {
   return allowed.size === 0 || allowed.has(normalized);
 }
 
+function blockResponse() {
+  return new Response("Not Found", {
+    status: 404,
+    headers: {
+      "cache-control": "no-store",
+      "x-robots-tag": "noindex, nofollow",
+    },
+  });
+}
+
 function buildCountryBlockMessage(env, network = {}) {
   const allowed = [...csvSet(env.ALLOWED_COUNTRIES, "ES")].join(",") || "none";
   return [
@@ -105,10 +115,48 @@ function buildCountryBlockMessage(env, network = {}) {
     `AllowedCountries: ${allowed.slice(0, 120)}`,
     "Reason: blocked_country",
     "Decision: block",
-    "Enforcement: HTTP 404",
+    "Enforcement: BLOCK_URL or 404 fallback",
     "DatasetEligible: false",
     "RawIP/UA stored: false",
   ].join("\n");
+}
+
+function buildRateLimitAutoBlockMessage(network = {}, limit = 3) {
+  return [
+    "🚫 AUTO_BLOCK_RATE_LIMIT",
+    `Country: ${String(network.country || "?").slice(0, 32)}`,
+    `ASN: ${String(network.asn || "?").slice(0, 48)}`,
+    `Org: ${String(network.org || "?").replace(/[\r\n\t]+/g, " ").slice(0, 160)}`,
+    `RateLimit: ${Number(limit || 3)}/min`,
+    "Trigger: request_above_limit",
+    "Scope: exact IP only",
+    "Action: added to blocklist",
+    "Enforcement: BLOCK_URL or 404 fallback",
+    "Raw IP stored: false",
+  ].join("\n");
+}
+
+async function notifyRateLimitAutoBlock(request, env, ctx, limiter, network) {
+  if (!limiter?.newlyAutoBlocked || !limiter?.ipKey || !env.DB || !env.CHALLENGE_SECRET) return;
+  try {
+    const eventId = crypto.randomUUID();
+    const mapped = await rememberEventIpKey(env.DB, eventId, limiter.ipKey);
+    let keyboard = null;
+    if (mapped) {
+      const webhook = await ensureTelegramWebhook(env, request.url);
+      if (webhook.configured === true) {
+        keyboard = await buildTelegramCallbackKeyboard(env.CHALLENGE_SECRET, eventId, "blocked");
+      }
+    }
+    waitUntil(
+      ctx,
+      sendTelegramWithKeyboard(
+        env,
+        buildRateLimitAutoBlockMessage(network, limiter.limit),
+        keyboard
+      )
+    );
+  } catch {}
 }
 
 async function operationalHealth(request, env, ctx) {
@@ -141,7 +189,9 @@ async function operationalHealth(request, env, ctx) {
       m22_telegram_callback_opens_browser: false,
       m22_telegram_webhook_path: "/_telegram/webhook",
       m22_rate_limit_ready: !!env.DB && !!env.CHALLENGE_SECRET,
-      m22_rate_limit_per_minute_per_network: rateLimitPerMinute(env),
+      m22_rate_limit_per_minute_per_exact_ip: rateLimitPerMinute(env),
+      m22_rate_limit_auto_block_exact_ip: true,
+      m22_rate_limit_exceed_action: "manual_ip_blocklist",
       m22_rate_limit_raw_ip_stored: false,
       m22_manual_ip_control_ready: !!env.DB && !!env.CHALLENGE_SECRET,
       m22_manual_ip_control_exact_ip: true,
@@ -156,6 +206,16 @@ async function operationalHealth(request, env, ctx) {
 
 async function operationalCheck(request, env, ctx) {
   const ip = clientIp(request);
+  const network = networkInfo(request);
+
+  // A previously blocked exact IP always takes the block path immediately.
+  // This runs before the limiter so blocked clients never receive a 429 page.
+  if (env.DB && env.CHALLENGE_SECRET) {
+    const existingIpKey = await deriveManualIpKey(env.CHALLENGE_SECRET, ip);
+    if (existingIpKey && (await isManualIpBlocked(env.DB, existingIpKey))) {
+      return blockResponse();
+    }
+  }
 
   const result = await checkMonitorRateLimit({
     db: env.DB,
@@ -164,42 +224,17 @@ async function operationalCheck(request, env, ctx) {
     limit: rateLimitPerMinute(env),
   });
 
-  const network = networkInfo(request);
-  if (!countryAllowed(env, network.country)) {
-    if (result.allowed) {
-      waitUntil(ctx, sendTelegramWithKeyboard(env, buildCountryBlockMessage(env, network), null));
-    }
-    return new Response("Not Found", {
-      status: 404,
-      headers: {
-        "cache-control": "no-store",
-        "x-robots-tag": "noindex, nofollow",
-      },
-    });
-  }
-
+  // Request 4 when limit=3 is immediately added to the exact-IP blocklist.
+  // Return the normal lower-layer block response so production redirects it to
+  // BLOCK_URL when configured; 404 remains the fallback when BLOCK_URL is absent.
   if (!result.allowed) {
-    return new Response("Too Many Monitor Requests", {
-      status: 429,
-      headers: {
-        "cache-control": "no-store",
-        "retry-after": String(result.retryAfterSeconds || 60),
-        "x-robots-tag": "noindex, nofollow",
-      },
-    });
+    await notifyRateLimitAutoBlock(request, env, ctx, result, network);
+    return blockResponse();
   }
 
-  if (env.DB && env.CHALLENGE_SECRET) {
-    const ipKey = await deriveManualIpKey(env.CHALLENGE_SECRET, ip);
-    if (ipKey && (await isManualIpBlocked(env.DB, ipKey))) {
-      return new Response("Not Found", {
-        status: 404,
-        headers: {
-          "cache-control": "no-store",
-          "x-robots-tag": "noindex, nofollow",
-        },
-      });
-    }
+  if (!countryAllowed(env, network.country)) {
+    waitUntil(ctx, sendTelegramWithKeyboard(env, buildCountryBlockMessage(env, network), null));
+    return blockResponse();
   }
 
   return m22DeepWorker.fetch(request, env, ctx);
@@ -249,14 +284,16 @@ async function handleManualIpAction(request, env, ctx) {
     `Event: ${String(payload.event_id).slice(0, 8)}`,
     "Scope: exact IP only",
     "Raw IP stored: false",
-    blocked ? "Future requests from this exact IP receive 404." : "This exact IP can access the monitor again.",
+    blocked
+      ? "Future requests from this exact IP follow BLOCK_URL when configured; otherwise 404."
+      : "This exact IP can access the monitor again.",
   ].join("\n");
   waitUntil(ctx, sendTelegramWithKeyboard(env, telegramText, null));
 
   const heading = blocked ? "🚫 IP blocked" : "🔓 IP unblocked";
   const detail = blocked
-    ? "Future requests from this exact IP will receive HTTP 404 on the V7 test monitor."
-    : "This exact IP can access the V7 test monitor again.";
+    ? "Future requests from this exact IP follow the configured block path."
+    : "This exact IP can access the V7 monitor again.";
 
   return new Response(
     `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>V7 Manual IP Control</title></head><body style="font-family:system-ui;padding:32px;max-width:720px;margin:auto"><h1>${htmlEscape(heading)}</h1><p>${htmlEscape(detail)}</p><p>Exact-IP HMAC match; raw IP is not stored.</p></body></html>`,
