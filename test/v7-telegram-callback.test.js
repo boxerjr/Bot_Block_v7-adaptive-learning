@@ -3,11 +3,16 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   buildTelegramCallbackKeyboard,
+  buildTelegramIpKeyCallbackKeyboard,
   parseTelegramIpCallback,
 } from "../src/adaptive/telegram-callback.js";
 
 const operational = readFileSync(
   new URL("../src/m22-operational-monitor-entry.js", import.meta.url),
+  "utf8"
+);
+const callbackSource = readFileSync(
+  new URL("../src/adaptive/telegram-callback.js", import.meta.url),
   "utf8"
 );
 
@@ -38,7 +43,29 @@ test("blocked keyboard exposes only UNBLOCK callback and no browser URL", async 
   assert.deepEqual(parsed, { action: "unblock", eventId });
 });
 
-test("tampered callback is rejected", async () => {
+test("rate-limit auto-block keyboard embeds only signed exact-IP HMAC and unblocks without event mapping", async () => {
+  const ipKey = "m22ip_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef";
+  const keyboard = await buildTelegramIpKeyCallbackKeyboard("secret-value", ipKey, "blocked");
+  const button = keyboard.inline_keyboard[0][0];
+
+  assert.equal(button.text, "🔓 UNBLOCK IP");
+  assert.equal("url" in button, false);
+  assert.ok(button.callback_data.length <= 64);
+  assert.equal(button.callback_data.includes("203.0.113."), false);
+
+  const parsed = await parseTelegramIpCallback("secret-value", button.callback_data);
+  assert.deepEqual(parsed, { action: "unblock", ipKey });
+});
+
+test("tampered direct exact-IP callback is rejected", async () => {
+  const ipKey = "m22ip_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef";
+  const keyboard = await buildTelegramIpKeyCallbackKeyboard("secret-value", ipKey, "blocked");
+  const data = keyboard.inline_keyboard[0][0].callback_data;
+  const tampered = data.slice(0, -1) + (data.endsWith("A") ? "B" : "A");
+  assert.equal(await parseTelegramIpCallback("secret-value", tampered), null);
+});
+
+test("tampered legacy callback is rejected", async () => {
   const eventId = "881e7c48-1111-4222-8333-123456789abc";
   const keyboard = await buildTelegramCallbackKeyboard("secret-value", eventId, "unblocked");
   const data = keyboard.inline_keyboard[0][0].callback_data;
@@ -46,10 +73,19 @@ test("tampered callback is rejected", async () => {
   assert.equal(await parseTelegramIpCallback("secret-value", tampered), null);
 });
 
+test("successful unblock resets rate-limit counters and shows Telegram alert", () => {
+  assert.match(callbackSource, /clearMonitorRateLimitForIpKey/);
+  assert.match(callbackSource, /Rate-limit counters reset: true/);
+  assert.match(callbackSource, /show_alert: !!showAlert/);
+  assert.match(callbackSource, /IP UNBLOCKED — access restored/);
+});
+
 test("operational worker exposes Telegram webhook and no-browser callback flags", () => {
   assert.match(operational, /\/_telegram\/webhook/);
   assert.match(operational, /handleTelegramCallbackWebhook/);
   assert.match(operational, /ensureTelegramWebhook/);
+  assert.match(operational, /buildTelegramIpKeyCallbackKeyboard/);
+  assert.match(operational, /m22_rate_limit_unblock_resets_counters: true/);
   assert.match(operational, /manual_ip_callback_opens_browser: false/);
   assert.match(operational, /m22_telegram_callback_opens_browser: false/);
 });
