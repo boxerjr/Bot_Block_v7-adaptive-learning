@@ -38,3 +38,7 @@ Every contributing installation needs:
 - trust score
 - contribution weighting
 - anomaly / poisoning detection
+
+## M1 preview policy
+
+The `m1-v63-compat` branch is preview-only until V6.3 compatibility tests pass. Non-production builds must use the version-upload path and must not promote M1 code to production.

@@ -1,7 +1,104 @@
 import { csvSet, boolEnv } from "./engine/config.js";
 import { clientIp, networkInfo } from "./engine/network.js";
+import { buildEvent } from "./adaptive/events.js";
+import { insertEvent } from "./storage/d1.js";
+import { writeDatasetObject } from "./storage/dataset.js";
+import { evaluateV63EarlyRules } from "./compat/v63/preflight.js";
+import { scoreV63Signals } from "./compat/v63/score-signals.js";
+import {
+  issueShadowBrowserToken,
+  verifyShadowBrowserToken,
+} from "./compat/v63/shadow-token.js";
+import { browserProbeHtml } from "./compat/v63/browser-probe.js";
 
-const VERSION = "V7.0_BOOTSTRAP";
+const VERSION = "V7.0_M1_SHADOW";
+const BASELINE = "V6.3_SILENT_AI";
+
+function adminAuthorized(request, env) {
+  const direct = request.headers.get("x-admin-secret") || "";
+  const auth = request.headers.get("authorization") || "";
+  const bearer = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
+  const supplied = direct || bearer;
+  return !!env.ADMIN_SECRET && supplied === env.ADMIN_SECRET;
+}
+
+function uaClaimSummary(ua = "") {
+  const value = String(ua);
+  const ios = /(iphone|ipad|ipod)/i.test(value);
+  const android = /android/i.test(value);
+  return {
+    mobile: ios || android || /mobile/i.test(value),
+    android,
+    ios,
+  };
+}
+
+function noStoreHtml(html, status = 200) {
+  return new Response(html, {
+    status,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store, no-cache, must-revalidate",
+      pragma: "no-cache",
+      "x-robots-tag": "noindex, nofollow",
+      "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+function telemetrySummary(telemetry, ua, score, source) {
+  return {
+    mode: "shadow",
+    baseline: BASELINE,
+    source,
+    dataset_eligible: false,
+    raw_ip_stored: false,
+    user_agent_stored: false,
+    raw_telemetry_stored: false,
+    critical: !!score.critical,
+    ua_claim: uaClaimSummary(ua),
+    telemetry_sections: {
+      navigator: !!telemetry.navigator,
+      ua_data: !!telemetry.uaData,
+      media: !!telemetry.media,
+      webgl: !!telemetry.webgl,
+      webgpu: !!telemetry.webgpu,
+      automation: !!telemetry.automation,
+      capabilities: !!telemetry.capabilities,
+      interaction: !!telemetry.interaction,
+    },
+  };
+}
+
+async function storeShadowObservation({ env, network, ua, telemetry, score, source, prefix }) {
+  const event = buildEvent({
+    network,
+    local: {
+      risk: score.risk,
+      spoofSignals: score.spoofSignals,
+      strongHardwareSpoof: score.strongHardwareSpoof,
+      reasons: score.reasons,
+    },
+    decision: "unknown",
+    finalReasons: ["shadow_only", "v63_local_score_only", source],
+    telemetrySummary: telemetrySummary(telemetry, ua, score, source),
+  });
+
+  const [d1Result, r2Result] = await Promise.allSettled([
+    insertEvent(env.DB, event),
+    writeDatasetObject(env.DATASET, event, { prefix }),
+  ]);
+
+  return {
+    event,
+    d1Result,
+    r2Result,
+    d1Written: d1Result.status === "fulfilled",
+    r2Written: r2Result.status === "fulfilled",
+  };
+}
 
 export default {
   async fetch(request, env) {
@@ -12,24 +109,393 @@ export default {
       return Response.json({
         status: "ok",
         version: VERSION,
-        phase: "bootstrap",
-        baseline: "V6.3_SILENT_AI",
+        phase: "m1-shadow",
+        baseline: BASELINE,
         country: network.country,
         asn: network.asn,
         ai_bound: !!env.AI,
         d1_bound: !!env.DB,
         r2_bound: !!env.DATASET,
+        admin_secret_bound: !!env.ADMIN_SECRET,
+        challenge_secret_bound: !!env.CHALLENGE_SECRET,
+        shadow_storage_test_ready: true,
+        v63_early_rules_ready: true,
+        v63_score_signals_ready: true,
+        v63_shadow_observation_ready: true,
+        v63_browser_probe_ready: true,
         allowed_countries: [...csvSet(env.ALLOWED_COUNTRIES, "ES")],
         mobile_only: boolEnv(env.MOBILE_ONLY, true),
         humans_only: boolEnv(env.HUMANS_ONLY, true),
       });
     }
 
+    if (url.pathname === "/_shadow/storage-test") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "method_not_allowed" }, { status: 405 });
+      }
+
+      if (!adminAuthorized(request, env)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+
+      const event = buildEvent({
+        network,
+        local: {
+          risk: 0,
+          spoofSignals: 0,
+          strongHardwareSpoof: false,
+          reasons: ["m1_shadow_storage_test"],
+        },
+        decision: "unknown",
+        finalReasons: ["shadow_only", "no_v63_decision_yet"],
+        telemetrySummary: {
+          mode: "shadow",
+          baseline: BASELINE,
+          storage_test: true,
+          raw_ip_stored: false,
+          user_agent_stored: false,
+        },
+      });
+
+      const [d1Result, r2Result] = await Promise.allSettled([
+        insertEvent(env.DB, event),
+        writeDatasetObject(env.DATASET, event),
+      ]);
+
+      const d1Written = d1Result.status === "fulfilled";
+      const r2Written = r2Result.status === "fulfilled";
+
+      return Response.json(
+        {
+          status: d1Written && r2Written ? "shadow_storage_ok" : "shadow_storage_partial",
+          version: VERSION,
+          event_id: event.event_id,
+          d1_written: d1Written,
+          r2_written: r2Written,
+          raw_ip_stored: false,
+          user_agent_stored: false,
+        },
+        { status: d1Written && r2Written ? 201 : 500 }
+      );
+    }
+
+    if (url.pathname === "/_shadow/v63-preflight") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "method_not_allowed" }, { status: 405 });
+      }
+
+      if (!adminAuthorized(request, env)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+
+      let body = {};
+      try {
+        body = await request.json();
+      } catch {
+        body = {};
+      }
+
+      const syntheticNetwork = {
+        ...network,
+        country: typeof body.country === "string" ? body.country : network.country,
+        asn: typeof body.asn === "string" ? body.asn : network.asn,
+        bot: {
+          ...(network.bot || {}),
+          verifiedBot:
+            typeof body.verifiedBot === "boolean"
+              ? body.verifiedBot
+              : !!network.bot?.verifiedBot,
+        },
+      };
+
+      const testPath = typeof body.path === "string" ? body.path : "/";
+      const testUa =
+        typeof body.ua === "string"
+          ? body.ua
+          : request.headers.get("user-agent") || "";
+
+      const result = evaluateV63EarlyRules({
+        path: testPath,
+        ua: testUa,
+        network: syntheticNetwork,
+        allowedCountries: csvSet(env.ALLOWED_COUNTRIES, "ES"),
+        humansOnly: boolEnv(env.HUMANS_ONLY, true),
+      });
+
+      return Response.json({
+        status: "v63_early_rules_shadow",
+        version: VERSION,
+        baseline: BASELINE,
+        enforcing: false,
+        input_summary: {
+          path: testPath,
+          country: syntheticNetwork.country,
+          asn: syntheticNetwork.asn,
+          verified_bot: !!syntheticNetwork.bot?.verifiedBot,
+          ua_present: testUa.length > 0,
+        },
+        result,
+      });
+    }
+
+    if (url.pathname === "/_shadow/v63-score") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "method_not_allowed" }, { status: 405 });
+      }
+
+      if (!adminAuthorized(request, env)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+
+      let body = {};
+      try {
+        body = await request.json();
+      } catch {
+        body = {};
+      }
+
+      const testUa =
+        typeof body.ua === "string"
+          ? body.ua
+          : request.headers.get("user-agent") || "";
+
+      const bodyBot = body.bot && typeof body.bot === "object" ? body.bot : {};
+      const syntheticNetwork = {
+        ...network,
+        country: typeof body.country === "string" ? body.country : network.country,
+        asn: typeof body.asn === "string" ? body.asn : network.asn,
+        bot: {
+          ...(network.bot || {}),
+          ...bodyBot,
+        },
+      };
+
+      const telemetry =
+        body.telemetry && typeof body.telemetry === "object" ? body.telemetry : {};
+
+      const result = scoreV63Signals({
+        request,
+        env,
+        network: syntheticNetwork,
+        ua: testUa,
+        telemetry,
+      });
+
+      return Response.json({
+        status: "v63_score_signals_shadow",
+        version: VERSION,
+        baseline: BASELINE,
+        enforcing: false,
+        input_summary: {
+          country: syntheticNetwork.country,
+          asn: syntheticNetwork.asn,
+          ua_present: testUa.length > 0,
+          telemetry_present: Object.keys(telemetry).length > 0,
+        },
+        result,
+      });
+    }
+
+    if (url.pathname === "/_shadow/v63-observe") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "method_not_allowed" }, { status: 405 });
+      }
+
+      if (!adminAuthorized(request, env)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+
+      let body = {};
+      try {
+        body = await request.json();
+      } catch {
+        body = {};
+      }
+
+      const testUa =
+        typeof body.ua === "string"
+          ? body.ua
+          : request.headers.get("user-agent") || "";
+      const bodyBot = body.bot && typeof body.bot === "object" ? body.bot : {};
+      const syntheticNetwork = {
+        ...network,
+        country: typeof body.country === "string" ? body.country : network.country,
+        asn: typeof body.asn === "string" ? body.asn : network.asn,
+        bot: {
+          ...(network.bot || {}),
+          ...bodyBot,
+        },
+      };
+      const telemetry =
+        body.telemetry && typeof body.telemetry === "object" ? body.telemetry : {};
+
+      const score = scoreV63Signals({
+        request,
+        env,
+        network: syntheticNetwork,
+        ua: testUa,
+        telemetry,
+      });
+
+      const stored = await storeShadowObservation({
+        env,
+        network: syntheticNetwork,
+        ua: testUa,
+        telemetry,
+        score,
+        source: "synthetic_admin_test",
+        prefix: "tests",
+      });
+
+      return Response.json(
+        {
+          status:
+            stored.d1Written && stored.r2Written
+              ? "v63_shadow_observation_stored"
+              : "v63_shadow_observation_partial",
+          version: VERSION,
+          baseline: BASELINE,
+          enforcing: false,
+          event_id: stored.event.event_id,
+          d1_written: stored.d1Written,
+          r2_written: stored.r2Written,
+          r2_key:
+            stored.r2Result.status === "fulfilled" ? stored.r2Result.value : null,
+          dataset_eligible: false,
+          raw_ip_stored: false,
+          user_agent_stored: false,
+          raw_telemetry_stored: false,
+          result: {
+            risk: score.risk,
+            spoofSignals: score.spoofSignals,
+            strongHardwareSpoof: score.strongHardwareSpoof,
+            critical: score.critical,
+            reasons: score.reasons,
+          },
+        },
+        { status: stored.d1Written && stored.r2Written ? 201 : 500 }
+      );
+    }
+
+    if (url.pathname === "/_shadow/browser-probe-session") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "method_not_allowed" }, { status: 405 });
+      }
+      if (!adminAuthorized(request, env)) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+      if (!env.CHALLENGE_SECRET) {
+        return Response.json({ error: "challenge_secret_missing" }, { status: 503 });
+      }
+
+      const token = await issueShadowBrowserToken(env.CHALLENGE_SECRET, 300000);
+      const probeUrl = `${url.origin}/_shadow/browser-probe?token=${encodeURIComponent(token)}`;
+
+      return Response.json({
+        status: "browser_probe_session_created",
+        version: VERSION,
+        enforcing: false,
+        expires_in_seconds: 300,
+        probe_url: probeUrl,
+        dataset_eligible: false,
+      });
+    }
+
+    if (url.pathname === "/_shadow/browser-probe") {
+      if (request.method !== "GET") {
+        return Response.json({ error: "method_not_allowed" }, { status: 405 });
+      }
+      if (!env.CHALLENGE_SECRET) {
+        return noStoreHtml("<!doctype html><p>Probe unavailable.</p>", 503);
+      }
+
+      const token = url.searchParams.get("token") || "";
+      const payload = await verifyShadowBrowserToken(env.CHALLENGE_SECRET, token);
+      if (!payload) {
+        return noStoreHtml("<!doctype html><p>Invalid or expired probe token.</p>", 401);
+      }
+
+      return noStoreHtml(browserProbeHtml(token));
+    }
+
+    if (url.pathname === "/_shadow/browser-probe-submit") {
+      if (request.method !== "POST") {
+        return Response.json({ error: "method_not_allowed" }, { status: 405 });
+      }
+      if (!env.CHALLENGE_SECRET) {
+        return Response.json({ error: "challenge_secret_missing" }, { status: 503 });
+      }
+
+      const contentLength = Number(request.headers.get("content-length") || 0);
+      if (Number.isFinite(contentLength) && contentLength > 120000) {
+        return Response.json({ error: "payload_too_large" }, { status: 413 });
+      }
+
+      let body = {};
+      try {
+        body = await request.json();
+      } catch {
+        return Response.json({ error: "invalid_json" }, { status: 400 });
+      }
+
+      const payload = await verifyShadowBrowserToken(
+        env.CHALLENGE_SECRET,
+        body.token || ""
+      );
+      if (!payload) {
+        return Response.json({ error: "invalid_or_expired_probe_token" }, { status: 401 });
+      }
+
+      const telemetry =
+        body.telemetry && typeof body.telemetry === "object" ? body.telemetry : {};
+      const ua = request.headers.get("user-agent") || "";
+      const score = scoreV63Signals({ request, env, network, ua, telemetry });
+
+      const stored = await storeShadowObservation({
+        env,
+        network,
+        ua,
+        telemetry,
+        score,
+        source: "real_browser_admin_test",
+        prefix: "tests/browser",
+      });
+
+      return Response.json(
+        {
+          status:
+            stored.d1Written && stored.r2Written
+              ? "v63_real_browser_observation_stored"
+              : "v63_real_browser_observation_partial",
+          version: VERSION,
+          baseline: BASELINE,
+          enforcing: false,
+          event_id: stored.event.event_id,
+          d1_written: stored.d1Written,
+          r2_written: stored.r2Written,
+          r2_key:
+            stored.r2Result.status === "fulfilled" ? stored.r2Result.value : null,
+          dataset_eligible: false,
+          raw_ip_stored: false,
+          user_agent_stored: false,
+          raw_telemetry_stored: false,
+          result: {
+            risk: score.risk,
+            spoofSignals: score.spoofSignals,
+            strongHardwareSpoof: score.strongHardwareSpoof,
+            critical: score.critical,
+            reasons: score.reasons,
+          },
+        },
+        { status: stored.d1Written && stored.r2Written ? 201 : 500 }
+      );
+    }
+
     return Response.json(
       {
-        status: "v7_bootstrap_only",
+        status: "v7_m1_shadow_only",
         version: VERSION,
-        message: "V6.3 compatibility engine not yet enabled.",
+        message: "V6.3 compatibility engine is not enforcing traffic yet.",
         ip_present: clientIp(request) !== "unknown",
       },
       { status: 503 }
