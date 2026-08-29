@@ -1,5 +1,6 @@
 import m22DeepWorker from "./m22-deep-monitor-entry-v2.js";
 import { clientIp, networkInfo } from "./engine/network.js";
+import { csvSet } from "./engine/config.js";
 import { checkMonitorRateLimit } from "./adaptive/monitor-rate-limit.js";
 import { deriveMonitorVerdict } from "./adaptive/monitor-verdict.js";
 import { buildTelegramDecisionMessage } from "./adaptive/telegram.js";
@@ -87,6 +88,29 @@ function htmlEscape(value) {
     .replaceAll('"', "&quot;");
 }
 
+function countryAllowed(env, country) {
+  const allowed = csvSet(env.ALLOWED_COUNTRIES, "ES");
+  const normalized = String(country || "").trim().toUpperCase();
+  if (!normalized) return true;
+  return allowed.size === 0 || allowed.has(normalized);
+}
+
+function buildCountryBlockMessage(env, network = {}) {
+  const allowed = [...csvSet(env.ALLOWED_COUNTRIES, "ES")].join(",") || "none";
+  return [
+    "🌍 BLOCK_BY_COUNTRY",
+    `Country: ${String(network.country || "?").slice(0, 32)}`,
+    `ASN: ${String(network.asn || "?").slice(0, 48)}`,
+    `Org: ${String(network.org || "?").replace(/[\r\n\t]+/g, " ").slice(0, 160)}`,
+    `AllowedCountries: ${allowed.slice(0, 120)}`,
+    "Reason: blocked_country",
+    "Decision: block",
+    "Enforcement: HTTP 404",
+    "DatasetEligible: false",
+    "RawIP/UA stored: false",
+  ].join("\n");
+}
+
 async function operationalHealth(request, env, ctx) {
   const response = await m22DeepWorker.fetch(request, env, ctx);
   let data;
@@ -104,6 +128,10 @@ async function operationalHealth(request, env, ctx) {
       m22_root_monitor_path: "/",
       m22_check_monitor_path: "/check",
       m22_policy_neutral_verdict_ready: true,
+      m22_country_policy_precedes_monitor_verdict: true,
+      m22_country_policy_enforcing: true,
+      m22_country_policy_block_status: 404,
+      m22_allowed_countries: [...csvSet(env.ALLOWED_COUNTRIES, "ES")],
       m22_bot_classes: ["automation", "crawler"],
       m22_spoof_classes: ["spoofed_device"],
       m22_human_classes: ["human_mobile", "human_desktop"],
@@ -119,8 +147,7 @@ async function operationalHealth(request, env, ctx) {
       m22_manual_ip_control_exact_ip: true,
       m22_manual_ip_control_raw_ip_stored: false,
       m22_manual_ip_block_enforcing: true,
-      m22_automated_enforcing: false,
-      m22_enforcing: false,
+      m22_ai_bot_enforcing: false,
       m22_dataset_eligible: false,
     },
     { status: response.status, headers: { "cache-control": "no-store" } }
@@ -129,6 +156,38 @@ async function operationalHealth(request, env, ctx) {
 
 async function operationalCheck(request, env, ctx) {
   const ip = clientIp(request);
+
+  const result = await checkMonitorRateLimit({
+    db: env.DB,
+    secret: env.CHALLENGE_SECRET,
+    ip,
+    limit: rateLimitPerMinute(env),
+  });
+
+  const network = networkInfo(request);
+  if (!countryAllowed(env, network.country)) {
+    if (result.allowed) {
+      waitUntil(ctx, sendTelegramWithKeyboard(env, buildCountryBlockMessage(env, network), null));
+    }
+    return new Response("Not Found", {
+      status: 404,
+      headers: {
+        "cache-control": "no-store",
+        "x-robots-tag": "noindex, nofollow",
+      },
+    });
+  }
+
+  if (!result.allowed) {
+    return new Response("Too Many Monitor Requests", {
+      status: 429,
+      headers: {
+        "cache-control": "no-store",
+        "retry-after": String(result.retryAfterSeconds || 60),
+        "x-robots-tag": "noindex, nofollow",
+      },
+    });
+  }
 
   if (env.DB && env.CHALLENGE_SECRET) {
     const ipKey = await deriveManualIpKey(env.CHALLENGE_SECRET, ip);
@@ -141,24 +200,6 @@ async function operationalCheck(request, env, ctx) {
         },
       });
     }
-  }
-
-  const result = await checkMonitorRateLimit({
-    db: env.DB,
-    secret: env.CHALLENGE_SECRET,
-    ip,
-    limit: rateLimitPerMinute(env),
-  });
-
-  if (!result.allowed) {
-    return new Response("Too Many Monitor Requests", {
-      status: 429,
-      headers: {
-        "cache-control": "no-store",
-        "retry-after": String(result.retryAfterSeconds || 60),
-        "x-robots-tag": "noindex, nofollow",
-      },
-    });
   }
 
   return m22DeepWorker.fetch(request, env, ctx);
@@ -341,9 +382,9 @@ async function operationalSubmit(request, env, ctx) {
       manual_ip_control_exact_ip: true,
       manual_ip_callback_opens_browser: false,
       manual_ip_raw_stored: false,
-      automated_enforcing: false,
+      ai_bot_enforcing: false,
+      country_policy_enforcing: true,
       manual_ip_block_enforcing: true,
-      enforcing: false,
       dataset_eligible: false,
       training_eligible: false,
     },
