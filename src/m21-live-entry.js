@@ -270,6 +270,13 @@ async function handleLiveProbePage(request, env) {
   if (request.method !== "GET") {
     return new Response("Method Not Allowed", { status: 405 });
   }
+  if (!env.CHALLENGE_SECRET) {
+    return new Response("Live capture unavailable.", {
+      status: 503,
+      headers: { "cache-control": "no-store" },
+    });
+  }
+
   const token = new URL(request.url).searchParams.get("token") || "";
   const payload = await verifyLiveCaptureToken(env.CHALLENGE_SECRET, token);
   if (!payload || !(await liveSessionUsable(env.DB, payload.sid))) {
@@ -285,6 +292,7 @@ async function handleLiveProbePage(request, env) {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
       "x-robots-tag": "noindex, nofollow",
+      "referrer-policy": "no-referrer",
     },
   });
 }
@@ -527,6 +535,7 @@ async function syncLiveFeedbackLabel(request, env, ctx) {
   } catch {}
 
   const response = await m2Worker.fetch(request, env, ctx);
+  if (![201, 409].includes(response.status)) return response;
   if (!requestedEventId || !env.DATASET || !env.DB) return response;
 
   let context;
