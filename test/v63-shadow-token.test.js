@@ -19,9 +19,9 @@ test("shadow browser token verifies and carries the expected type", async () => 
 test("tampered shadow browser token is rejected", async () => {
   const token = await issueShadowBrowserToken("test-secret-value", 60000);
   const [body, signature] = token.split(".");
-  const last = signature.at(-1);
-  const replacement = last === "A" ? "B" : "A";
-  const tampered = `${body}.${signature.slice(0, -1)}${replacement}`;
+  const first = signature.at(0);
+  const replacement = first === "A" ? "B" : "A";
+  const tampered = `${body}.${replacement}${signature.slice(1)}`;
 
   const payload = await verifyShadowBrowserToken("test-secret-value", tampered);
   assert.equal(payload, null);
