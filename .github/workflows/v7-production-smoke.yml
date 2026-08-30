@@ -1,0 +1,34 @@
+name: V7 production smoke
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  production-smoke:
+    name: production-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      V7_PRODUCTION_HEALTH_URL: ${{ vars.V7_PRODUCTION_HEALTH_URL || 'https://v7-adaptive-learning.vasilebrescan.workers.dev/_health' }}
+      V7_SMOKE_ATTEMPTS: "9"
+      V7_SMOKE_DELAY_MS: "10000"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Verify live V7 health
+        run: node scripts/production-smoke.mjs
