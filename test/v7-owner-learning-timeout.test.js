@@ -42,7 +42,8 @@ test("expired unanswered HUMAN_PASS becomes false negative and exact-IP block", 
 
 test("IT'S ME is fail-closed and rejected without a live pending confirmation", () => {
   assert.match(ownerLearning, /getOwnerConfirmationState/);
-  assert.match(ownerLearning, /if \(!confirmation\)/);
+  assert.match(ownerLearning, /observedAt/);
+  assert.match(ownerLearning, /OWNER_CONFIRM_TIMEOUT_MS/);
   assert.match(ownerLearning, /reason: "confirmation_unavailable"/);
   assert.match(ownerLearning, /if \(confirmation\.claimed\)/);
   assert.match(ownerLearning, /if \(confirmation\.expired\)/);

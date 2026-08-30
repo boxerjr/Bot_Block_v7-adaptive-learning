@@ -217,7 +217,7 @@ During a controlled owner-only session, set it to `true`. A `HUMAN_PASS` then re
 
 `NOT ME` writes `false_negative` with confidence 100 and blocks the exact IP.
 
-If no `IT'S ME` confirmation arrives within three minutes, the pending controlled-session event becomes automatic `NOT ME` and the exact IP is blocked. Because the Cloudflare sweep runs once per minute, enforcement may occur shortly after the exact three-minute deadline.
+If no `IT'S ME` confirmation arrives within three minutes, the pending controlled-session event becomes automatic `NOT ME` and the exact IP is blocked. If the timer write races with a callback, V7 falls back to the original event timestamp but keeps the same three-minute deadline. Because the Cloudflare sweep runs once per minute, enforcement may occur shortly after the exact three-minute deadline.
 
 Never leave OWNER learning enabled for uncontrolled public traffic.
 

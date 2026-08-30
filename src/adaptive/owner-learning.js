@@ -5,6 +5,7 @@ import {
   rebuildAdaptiveReputation,
 } from "../storage/adaptive-d1.js";
 import {
+  OWNER_CONFIRM_TIMEOUT_MS,
   clearOwnerConfirmation,
   getOwnerConfirmationState,
 } from "./owner-learning-timeout.js";
@@ -25,26 +26,36 @@ export async function recordOwnerHumanConfirmed(db, eventId, nowMs = Date.now())
   }
 
   try {
-    // HUMAN truth is fail-closed: a signed Telegram callback is not enough by
-    // itself. The event must still have the persistent controlled-session timer
-    // that was armed when its IT'S ME / NOT ME buttons were created.
-    const confirmation = await getOwnerConfirmationState(db, eventId, nowMs);
-    if (!confirmation) {
-      return { learned: false, reason: "confirmation_unavailable" };
-    }
-    if (confirmation.claimed) {
-      return { learned: false, reason: "confirmation_claimed" };
-    }
-    if (confirmation.expired) {
-      return {
-        learned: false,
-        reason: "confirmation_expired",
-        deadlineMs: confirmation.deadlineMs,
-      };
-    }
-
     const context = await getAdaptiveEventContext(db, eventId);
     if (!context) return { learned: false, reason: "event_not_found" };
+
+    // HUMAN truth is fail-closed: a signed Telegram callback is not enough by
+    // itself. Prefer the persistent controlled-session timer that was armed
+    // when the buttons were created. If that write was lost during a transient
+    // D1 race, recover from the event timestamp while keeping the same three-
+    // minute deadline and all event/policy invariants below.
+    const confirmation = await getOwnerConfirmationState(db, eventId, nowMs);
+    if (confirmation) {
+      if (confirmation.claimed) {
+        return { learned: false, reason: "confirmation_claimed" };
+      }
+      if (confirmation.expired) {
+        return {
+          learned: false,
+          reason: "confirmation_expired",
+          deadlineMs: confirmation.deadlineMs,
+        };
+      }
+    } else {
+      const observedMs = Date.parse(context.observedAt || "");
+      if (!Number.isFinite(observedMs)) {
+        return { learned: false, reason: "confirmation_unavailable" };
+      }
+      const deadlineMs = observedMs + OWNER_CONFIRM_TIMEOUT_MS;
+      if (nowMs >= deadlineMs) {
+        return { learned: false, reason: "confirmation_expired", deadlineMs };
+      }
+    }
 
     // OWNER learning buttons are only shown on HUMAN_PASS. Keep the same
     // invariant at write time so an old/tampered callback cannot confirm a

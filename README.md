@@ -201,7 +201,7 @@ During an explicitly controlled owner-only session, `HUMAN_PASS` can expose:
 
 `NOT ME` records `false_negative` with confidence 100 and exact-IP blocks the request source.
 
-If no `IT'S ME` confirmation arrives inside the three-minute deadline, the controlled pending event becomes automatic `NOT ME`. Keep this mode **off** during uncontrolled public traffic.
+If no `IT'S ME` confirmation arrives inside the three-minute deadline, the controlled pending event becomes automatic `NOT ME`. If the timer write races with the callback, V7 verifies the original event timestamp and applies the same three-minute deadline. Keep this mode **off** during uncontrolled public traffic.
 
 ### Exact-IP privacy-preserving state
 
