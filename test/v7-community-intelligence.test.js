@@ -28,7 +28,7 @@ test("community intelligence defaults are enabled and use canonical public feed"
   assert.equal(communityHardBlockEnabled({}), true);
   assert.match(
     communityUpstreamUrl({}),
-    /boxerjr\/v7-adaptive-learning\/community-feed\/community\/intelligence\.json/
+    /boxerjr\/Bot_Block_v7-adaptive-learning\/community-feed\/community\/intelligence\.json/
   );
 });
 

@@ -15,8 +15,8 @@ You need:
 Clone your fork or this repository:
 
 ```bash
-git clone https://github.com/boxerjr/v7-adaptive-learning.git
-cd v7-adaptive-learning
+git clone https://github.com/boxerjr/Bot_Block_v7-adaptive-learning.git
+cd Bot_Block_v7-adaptive-learning
 npm install
 ```
 

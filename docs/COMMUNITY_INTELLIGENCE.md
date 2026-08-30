@@ -118,7 +118,7 @@ with the full export URL of the Worker.
 By default, V7 reads the canonical upstream:
 
 ```text
-https://raw.githubusercontent.com/boxerjr/v7-adaptive-learning/community-feed/community/intelligence.json
+https://raw.githubusercontent.com/boxerjr/Bot_Block_v7-adaptive-learning/community-feed/community/intelligence.json
 ```
 
 The Worker refreshes it every six hours and stores a local D1 copy with a 24-hour expiry.
