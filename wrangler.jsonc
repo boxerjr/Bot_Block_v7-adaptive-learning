@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "v7-adaptive-learning",
-  "main": "src/v7-owner-timeout-entry.js",
+  "main": "src/v7-global-honeypot-entry.js",
   "compatibility_date": "2026-08-29",
 
   "vars": {
@@ -32,7 +32,8 @@
     "OWNER_LEARNING_MODE": "false",
     "ASN_HARD_BLOCK_ENABLED": "true",
     "ASN_SPAMHAUS_DROP_ENABLED": "true",
-    "ORG_INFRASTRUCTURE_HARD_BLOCK_ENABLED": "true"
+    "ORG_INFRASTRUCTURE_HARD_BLOCK_ENABLED": "true",
+    "HONEYPOT_ENFORCING": "true"
   },
 
   "triggers": {
