@@ -22,6 +22,42 @@ const REQUIRED_TRIGGERS = Object.freeze({
   trg_adaptive_feedback_clear_notes_update: "0004_adaptive_feedback_hardening.sql",
 });
 
+const ADDITIVE_RELEASE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS asn_intelligence (
+  asn TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  tier TEXT NOT NULL,
+  reason TEXT,
+  updated_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_asn_intelligence_expiry
+  ON asn_intelligence(expires_at_ms);
+CREATE TABLE IF NOT EXISTS asn_intelligence_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at_ms INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS community_asn_intelligence (
+  asn TEXT PRIMARY KEY,
+  tier TEXT NOT NULL CHECK (tier IN ('hard', 'risk')),
+  source TEXT NOT NULL,
+  reason TEXT,
+  confidence INTEGER NOT NULL DEFAULT 0 CHECK (confidence BETWEEN 0 AND 100),
+  feedback_count INTEGER NOT NULL DEFAULT 0,
+  feed_generated_at TEXT,
+  updated_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_community_asn_expiry
+  ON community_asn_intelligence(expires_at_ms);
+CREATE TABLE IF NOT EXISTS community_intelligence_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  updated_at_ms INTEGER NOT NULL
+);
+`;
+
 function unique(values) {
   return [...new Set(values)];
 }
@@ -35,6 +71,36 @@ async function sqliteObjects(db, type) {
   return new Set(rows.map((row) => String(row?.name || "")).filter(Boolean));
 }
 
+/**
+ * Runtime bootstrap for migrations 0006 and 0007 only.
+ *
+ * These migrations are purely additive intelligence/cache tables with no data
+ * transformation. Older foundational migrations (0001-0005) are deliberately
+ * NOT created here: a genuinely fresh or broken installation must still run
+ * Wrangler migrations and remain release-not-ready until it does.
+ */
+export async function ensureReleaseAdditiveSchema(db) {
+  if (!db) return { ready: false, reason: "db_unavailable" };
+  try {
+    await db.exec(ADDITIVE_RELEASE_SCHEMA_SQL);
+    return {
+      ready: true,
+      reason: "ok",
+      bootstrappedMigrations: [
+        "0006_asn_intelligence.sql",
+        "0007_community_intelligence.sql",
+      ],
+    };
+  } catch (error) {
+    return {
+      ready: false,
+      reason: "additive_schema_bootstrap_failed",
+      error: String(error?.message || error).slice(0, 160),
+      bootstrappedMigrations: [],
+    };
+  }
+}
+
 export async function getReleaseSchemaHealth(db) {
   if (!db) {
     return {
@@ -46,6 +112,7 @@ export async function getReleaseSchemaHealth(db) {
         ...Object.values(REQUIRED_TABLES),
         ...Object.values(REQUIRED_TRIGGERS),
       ]),
+      requiredMigrationCount: 7,
     };
   }
 
