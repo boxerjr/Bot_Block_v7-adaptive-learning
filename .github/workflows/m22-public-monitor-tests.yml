@@ -25,5 +25,5 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Run all regression tests
-        run: node --test
+      - name: Run release verification
+        run: npm run verify
