@@ -55,6 +55,23 @@ The shared feed excludes:
 - Telegram data
 - third-party Spamhaus records
 
+## 3A. Local static bot intelligence
+
+V7 includes a curated, local set of precise scanner, automation, crawler and
+declared-bot signatures. The useful signatures are vendored into the Worker;
+production does not download or depend on another blocker.
+
+Under `HUMANS_ONLY=true`, a precise declared crawler such as `GPTBot`,
+`ClaudeBot`, `Googlebot`, `Bytespider` or `SemrushBot` is rejected before ASN,
+country, browser and AI work. High-confidence scanner/automation clients such
+as `sqlmap`, `masscan`, `Acunetix`, `Nmap`, `python-requests` and headless
+frameworks are rejected regardless of the human-only toggle.
+
+Ambiguous short names, upstream raw-IP lists and upstream referrer lists are
+not included. A match does not create a truth label, alter ASN reputation, or
+store the raw User-Agent. `LOCAL_STATIC_BOT_INTEL_ENABLED` is an optional kill
+switch and defaults to `true`.
+
 ## 4. ASN Intelligence
 
 V7 combines several ASN sources:
@@ -248,6 +265,7 @@ For an external request, the effective fast path is:
 ```text
 exact-IP block
 → honeypot
+→ local static bot/scanner signature
 → community HARD ASN
 → local/static/external HARD ASN + Org infrastructure
 → country

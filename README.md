@@ -21,6 +21,7 @@ V7 does not depend on one User-Agent regex or one AI answer. It uses several ind
 ```text
 exact-IP state
 → honeypot paths
+→ local static bot/scanner signatures
 → shared Community HARD ASN
 → local/static/external ASN intelligence
 → organization intelligence
@@ -100,6 +101,19 @@ honeypot
 ```
 
 Normal browser paths such as `/favicon.ico` and `/robots.txt` are not honeypots.
+
+### Local static bot intelligence
+
+V7 vendors a curated local set of 152 precise scanner, automation and
+self-declared crawler signatures. This layer does not download or call another
+blocker at runtime. With `HUMANS_ONLY=true`, declared bots such as `GPTBot`,
+`ClaudeBot`, `Googlebot`, `Bytespider` and `SemrushBot` are rejected before
+ASN, country, browser and AI processing. High-confidence tools such as
+`sqlmap`, `masscan`, `Acunetix` and headless automation are always rejected.
+
+Ambiguous short names and upstream raw-IP/referrer lists are deliberately not
+included. Matches do not become learning labels and do not change ASN
+reputation.
 
 ### Community Intelligence
 
@@ -298,6 +312,7 @@ Current strict defaults include:
 ALLOWED_COUNTRIES=ES
 MOBILE_ONLY=true
 HUMANS_ONLY=true
+LOCAL_STATIC_BOT_INTEL_ENABLED=true
 RATE_LIMIT_PER_MIN=3
 REDIRECT_ENFORCING=true
 OWNER_LEARNING_MODE=false
@@ -366,7 +381,7 @@ npx wrangler dev
 GET /_health
 ```
 
-reports major policy/readiness state including redirects, Telegram, exact-IP control, rate limiting, owner learning, ASN intelligence, honeypots and Community Intelligence.
+reports major policy/readiness state including redirects, Telegram, exact-IP control, rate limiting, owner learning, local static bot intelligence, ASN intelligence, honeypots and Community Intelligence.
 
 ## Security
 

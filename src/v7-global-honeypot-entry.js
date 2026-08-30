@@ -1,5 +1,6 @@
 import worker from "./v7-owner-timeout-entry.js";
 import { clientIp, networkInfo } from "./engine/network.js";
+import { boolEnv } from "./engine/config.js";
 import {
   deriveManualIpKey,
   isManualIpBlocked,
@@ -29,6 +30,11 @@ import {
   getCommunityIntelligenceHealth,
   refreshCommunityIntelligence,
 } from "./adaptive/community-intelligence.js";
+import {
+  classifyLocalStaticUa,
+  localStaticBotIntelEnabled,
+  localStaticBotIntelStats,
+} from "./adaptive/local-static-bot-intelligence.js";
 
 function waitUntil(ctx, promise) {
   if (ctx?.waitUntil) ctx.waitUntil(promise);
@@ -121,7 +127,7 @@ function honeypotMessage({ network, match, orgIntel, promotion }) {
   lines.push(
     "Decision: block",
     "ExactIP: auto-blocked",
-    "PolicyOrder: exact-IP → honeypot → community ASN → ASN/Org → country → device → AI",
+    "PolicyOrder: exact-IP → honeypot → local static UA → community ASN → ASN/Org → country → device → AI",
     "AI: skipped — hostile path is deterministic",
     "DatasetEligible: false",
     "RawIP/UA stored: false"
@@ -142,6 +148,23 @@ function communityAsnMessage(network, intel) {
     "Policy: shared HARD contains deterministic hosting/VPN/proxy infrastructure only",
     "Decision: block",
     "AI: skipped",
+    "RawIP/UA stored: false",
+  ].join("\n");
+}
+
+function localStaticBotMessage(network, intel) {
+  return [
+    "🤖 BLOCK_BY_LOCAL_STATIC_UA",
+    `Country: ${clean(network.country || "?")}`,
+    `ASN: ${clean(network.asn || "?")}`,
+    `Org: ${clean(network.org || "?")}`,
+    `Category: ${clean(intel.category || "declared_bot")}`,
+    `Marker: ${clean(intel.marker || "unknown")}`,
+    `Source: ${clean(intel.source || "v7_local_curated")}`,
+    "Decision: block",
+    "AI: skipped — local high-confidence signature",
+    "External runtime dependency: false",
+    "Training/reputation update: false",
     "RawIP/UA stored: false",
   ].join("\n");
 }
@@ -209,6 +232,24 @@ async function handleCommunityHardAsn(request, env, ctx, network, intel) {
   return redirectResponse(request, env, "block") || blockFallbackResponse();
 }
 
+async function handleLocalStaticBot(request, env, ctx, network, intel) {
+  try {
+    const limiter = await checkMonitorRateLimit({
+      db: env.DB,
+      secret: env.CHALLENGE_SECRET,
+      ip: clientIp(request),
+      limit: rateLimitPerMinute(env),
+    });
+    if (limiter.allowed) {
+      waitUntil(
+        ctx,
+        sendTelegramWithKeyboard(env, localStaticBotMessage(network, intel), null)
+      );
+    }
+  } catch {}
+  return redirectResponse(request, env, "block") || blockFallbackResponse();
+}
+
 async function communityExport(env) {
   if (!communityExportEnabled(env)) return blockFallbackResponse();
   const feed = await buildCommunityIntelligenceExport(env);
@@ -237,6 +278,7 @@ async function health(request, env, ctx) {
   }
 
   const stats = honeypotRuleStats();
+  const localBotIntel = localStaticBotIntelStats();
   const community = await getCommunityIntelligenceHealth(env);
   return Response.json(
     {
@@ -252,6 +294,22 @@ async function health(request, env, ctx) {
       v7_honeypot_total_rule_entries: stats.totalRuleEntries,
       v7_honeypot_raw_ip_stored: false,
       v7_honeypot_training_eligible: false,
+      v7_local_static_bot_intel_enabled: localStaticBotIntelEnabled(env),
+      v7_local_static_bot_intel_mode: localBotIntel.mode,
+      v7_local_static_bot_intel_runtime_external_dependency:
+        localBotIntel.runtimeExternalDependency,
+      v7_local_static_bot_intel_upstream_version:
+        localBotIntel.upstreamVersion,
+      v7_local_static_bot_intel_upstream_blob:
+        localBotIntel.upstreamListBlob,
+      v7_local_static_bot_intel_scanner_markers:
+        localBotIntel.scannerAutomationMarkers,
+      v7_local_static_bot_intel_declared_bot_markers:
+        localBotIntel.declaredBotMarkers,
+      v7_local_static_bot_intel_total_markers: localBotIntel.totalMarkers,
+      v7_local_static_bot_intel_precedes_asn_country_ai: true,
+      v7_local_static_bot_intel_raw_ua_stored: false,
+      v7_local_static_bot_intel_training_eligible: false,
       v7_community_intel_export_enabled: community.exportEnabled,
       v7_community_intel_upstream_enabled: community.upstreamEnabled,
       v7_community_intel_hard_block_enabled: community.hardBlockEnabled,
@@ -292,6 +350,16 @@ export default {
     }
 
     const network = networkInfo(request);
+    if (localStaticBotIntelEnabled(env)) {
+      const localBotIntel = classifyLocalStaticUa(
+        request.headers.get("user-agent") || "",
+        { humansOnly: boolEnv(env.HUMANS_ONLY, true) }
+      );
+      if (localBotIntel.matched && localBotIntel.tier === "hard") {
+        return handleLocalStaticBot(request, env, ctx, network, localBotIntel);
+      }
+    }
+
     const communityIntel = await classifyCommunityAsn(env, network.asn);
     if (communityIntel?.hardBlock) {
       return handleCommunityHardAsn(request, env, ctx, network, communityIntel);
