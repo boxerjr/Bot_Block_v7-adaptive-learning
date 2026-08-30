@@ -25,11 +25,17 @@ export async function recordOwnerHumanConfirmed(db, eventId, nowMs = Date.now())
   }
 
   try {
-    // New OWNER_LEARNING_MODE observations have a 3-minute confirmation row.
-    // Once that deadline has passed, IT'S ME is no longer accepted even if the
-    // once-per-minute timeout sweep has not fired yet.
+    // HUMAN truth is fail-closed: a signed Telegram callback is not enough by
+    // itself. The event must still have the persistent controlled-session timer
+    // that was armed when its IT'S ME / NOT ME buttons were created.
     const confirmation = await getOwnerConfirmationState(db, eventId, nowMs);
-    if (confirmation?.expired) {
+    if (!confirmation) {
+      return { learned: false, reason: "confirmation_unavailable" };
+    }
+    if (confirmation.claimed) {
+      return { learned: false, reason: "confirmation_claimed" };
+    }
+    if (confirmation.expired) {
       return {
         learned: false,
         reason: "confirmation_expired",
