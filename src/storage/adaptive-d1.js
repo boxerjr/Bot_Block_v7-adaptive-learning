@@ -217,12 +217,15 @@ export async function getAdaptiveEventContext(db, eventId) {
   } catch {}
 
   const datasetEligible = summary?.dataset_eligible === true;
+  const declaredScope = ["live", "test"].includes(String(summary?.scope || ""))
+    ? String(summary.scope)
+    : null;
   return {
     eventId: row.event_id,
     asn: row.asn || null,
     v63Decision: row.final_decision || "unknown",
     fingerprintId: row.fingerprint_id || null,
-    scope: row.adaptive_scope || (datasetEligible ? "live" : "test"),
+    scope: row.adaptive_scope || declaredScope || (datasetEligible ? "live" : "test"),
     datasetEligible,
   };
 }

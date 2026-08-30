@@ -70,6 +70,8 @@ export function buildTelegramDecisionMessage({
   fingerprint = null,
   policyBaseline = null,
   monitorDeepInspection = false,
+  enforcing = false,
+  enforcementAction = null,
 }) {
   const ai1 = decision.ai?.ai || null;
   const ai2 = decision.ai?.critic || null;
@@ -148,7 +150,13 @@ export function buildTelegramDecisionMessage({
     );
   }
 
-  lines.push("DatasetEligible: false", "Enforcing: false", "RawIP/UA stored: false");
+  lines.push(
+    "DatasetEligible: false",
+    enforcing
+      ? `ProductionEnforcing: true action=${clean(enforcementAction || "unknown")}`
+      : "DetectionEnforcing: false",
+    "RawIP/UA stored: false"
+  );
   return lines.join("\n").slice(0, 3900);
 }
 

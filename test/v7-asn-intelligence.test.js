@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { classifyAsn } from "../src/adaptive/asn-intelligence.js";
+import {
+  classifyAsn,
+  organizationRuleEligibleForHardPromotion,
+} from "../src/adaptive/asn-intelligence.js";
 
 const policy = readFileSync(
   new URL("../src/m22-policy-enforcing-entry.js", import.meta.url),
@@ -54,18 +57,40 @@ test("hard ASN and organization infrastructure gate execute before country", () 
   assert.match(policy, /PolicyOrder: ASN\/Org infrastructure before country/);
 });
 
-test("hosting and VPN organization classes are deterministic blocks and promote ASN to hard", () => {
-  assert.match(wrangler, /"ORG_INFRASTRUCTURE_HARD_BLOCK_ENABLED": "true"/);
+test("hosting and VPN organization classes remain deterministic request blocks", () => {
+  assert.match(wrangler, /"ORG_INFRASTRUCTURE_HARD_BLOCK_ENABLED"\s*:\s*"true"/);
   assert.match(policy, /\["hosting_cloud", "vpn_proxy"\]\.includes\(orgIntel\.class\)/);
   assert.match(policy, /promoteAsnToHardFromOrganization/);
+});
+
+test("only provider-specific organization rules can persist an ASN as org_auto_hard", () => {
+  assert.equal(organizationRuleEligibleForHardPromotion("hosting_cloud", "ovh"), true);
+  assert.equal(organizationRuleEligibleForHardPromotion("hosting_cloud", "amazon_web_services"), true);
+  assert.equal(organizationRuleEligibleForHardPromotion("vpn_proxy", "tor_exit"), true);
+
+  for (const genericRule of [
+    "consumer_vpn",
+    "vpn_keyword",
+    "proxy_keyword",
+    "residential_proxy",
+    "anonymizer_keyword",
+    "privacy_network",
+  ]) {
+    assert.equal(
+      organizationRuleEligibleForHardPromotion("vpn_proxy", genericRule),
+      false,
+      genericRule
+    );
+  }
+
+  assert.match(intel, /generic_organization_rule_not_persisted/);
   assert.match(intel, /source = 'org_auto_hard'/);
   assert.match(intel, /VALUES \(\?, 'org_auto_hard', 'hard'/);
-  assert.match(intel, /expires_at_ms\)\n\s*VALUES \(\?, 'org_auto_hard', 'hard', \?, \?, NULL\)/);
 });
 
 test("Spamhaus ASN-DROP is enabled and refreshed from cron no more than daily", () => {
-  assert.match(wrangler, /"ASN_HARD_BLOCK_ENABLED": "true"/);
-  assert.match(wrangler, /"ASN_SPAMHAUS_DROP_ENABLED": "true"/);
+  assert.match(wrangler, /"ASN_HARD_BLOCK_ENABLED"\s*:\s*"true"/);
+  assert.match(wrangler, /"ASN_SPAMHAUS_DROP_ENABLED"\s*:\s*"true"/);
   assert.match(scheduler, /refreshSpamhausAsnDrop/);
   assert.match(intel, /https:\/\/www\.spamhaus\.org\/drop\/asndrop\.json/);
   assert.match(intel, /24 \* 60 \* 60 \* 1000/);
