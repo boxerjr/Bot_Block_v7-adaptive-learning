@@ -153,8 +153,8 @@ export function buildTelegramDecisionMessage({
   lines.push(
     "DatasetEligible: false",
     enforcing
-      ? `Enforcing: true action=${clean(enforcementAction || "unknown")}`
-      : "Enforcing: false",
+      ? `ProductionEnforcing: true action=${clean(enforcementAction || "unknown")}`
+      : "DetectionEnforcing: false",
     "RawIP/UA stored: false"
   );
   return lines.join("\n").slice(0, 3900);
