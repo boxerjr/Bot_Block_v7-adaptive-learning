@@ -1,9 +1,6 @@
 name: V7 production smoke
 
 on:
-  pull_request:
-    branches:
-      - main
   push:
     branches:
       - main
