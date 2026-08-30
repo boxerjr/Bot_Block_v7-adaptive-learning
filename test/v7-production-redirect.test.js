@@ -19,6 +19,10 @@ const globalWrapper = readFileSync(
   new URL("../src/v7-global-honeypot-entry.js", import.meta.url),
   "utf8"
 );
+const releaseWrapper = readFileSync(
+  new URL("../src/v7-release-hardening-entry.js", import.meta.url),
+  "utf8"
+);
 const wrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
 
 const env = {
@@ -177,17 +181,18 @@ test("production probe UI is strictly invisible while fully configured redirects
   assert.match(production, /v7_silent_probe_visible_fallback: false/);
 });
 
-test("production wrapper redirects after browser probe and wrangler exposes no target URLs", () => {
+test("production wrapper redirects after browser probe and hardened entry exposes no target URLs", () => {
   assert.match(production, /window\.location\.replace\(data\.redirect_url\)/);
   assert.match(production, /chooseFinalRedirect/);
   assert.match(production, /response\.status === 404/);
   assert.match(production, /BLOCK_URL_OR_404_FALLBACK/);
-  assert.match(wrangler, /"main": "src\/v7-global-honeypot-entry\.js"/);
+  assert.match(wrangler, /"main"\s*:\s*"src\/v7-release-hardening-entry\.js"/);
+  assert.match(releaseWrapper, /import worker from "\.\/v7-global-honeypot-entry\.js"/);
   assert.match(globalWrapper, /import worker from "\.\/v7-owner-timeout-entry\.js"/);
   assert.match(timeoutWrapper, /import productionWorker from "\.\/v7-production-entry\.js"/);
   assert.match(timeoutWrapper, /productionWorker\.fetch\(request, env, ctx\)/);
-  assert.match(wrangler, /"REDIRECT_ENFORCING": "true"/);
-  assert.match(wrangler, /"RATE_LIMIT_PER_MIN": "3"/);
+  assert.match(wrangler, /"REDIRECT_ENFORCING"\s*:\s*"true"/);
+  assert.match(wrangler, /"RATE_LIMIT_PER_MIN"\s*:\s*"3"/);
   assert.doesNotMatch(wrangler, /"ORIGIN_URL"/);
   assert.doesNotMatch(wrangler, /"BLOCK_URL"/);
 });
