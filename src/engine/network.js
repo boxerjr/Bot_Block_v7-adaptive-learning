@@ -1,9 +1,9 @@
 export function clientIp(request) {
-  return (
-    request.headers.get("cf-connecting-ip") ||
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    "unknown"
-  );
+  // Cloudflare sets CF-Connecting-IP at the edge. Do not fall back to
+  // X-Forwarded-For for enforcement identity because that header can be
+  // client-controlled in non-standard/proxied request paths.
+  const value = request?.headers?.get?.("cf-connecting-ip") || "";
+  return String(value).trim() || "unknown";
 }
 
 export function networkInfo(request) {
