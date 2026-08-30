@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "generated_at": null,
+  "producer": "v7-adaptive-learning",
+  "privacy": {
+    "raw_ip": false,
+    "user_agent": false,
+    "fingerprint": false,
+    "telemetry": false,
+    "event_ids": false
+  },
+  "policy": {
+    "hard": "Only locally-derived hosting/VPN/proxy infrastructure promoted by deterministic V7 policy.",
+    "risk": "Only strong aggregated hostile ASN reputation; never auto-hard-blocked from feedback alone."
+  },
+  "hard_asns": [],
+  "risk_asns": []
+}
