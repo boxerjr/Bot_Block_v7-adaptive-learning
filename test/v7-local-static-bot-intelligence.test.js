@@ -35,6 +35,10 @@ test("precise scanners and automation clients hard-block locally", () => {
     "Mozilla/5.0 Acunetix-WebScanner/1.0",
     "masscan/1.3",
     "python-requests/2.32",
+    "python-httpx/0.28",
+    "zgrab/0.x",
+    "okhttp/4.12",
+    "Mozilla/5.0 HTTrack/3.49",
     "Mozilla/5.0 HeadlessChrome/151.0",
   ]) {
     const result = classifyLocalStaticUa(ua, { humansOnly: false });
@@ -51,6 +55,9 @@ test("self-declared crawlers block only under humans-only policy", () => {
     "Mozilla/5.0 (compatible; Googlebot/2.1)",
     "facebookexternalhit/1.1",
     "SemrushBot/7~bl",
+    "BomboraBot/1.0",
+    "GlobalPing/1.0",
+    "rogerbot/1.0",
   ]) {
     assert.equal(
       classifyLocalStaticUa(ua, { humansOnly: true }).matched,
@@ -70,6 +77,7 @@ test("realistic mobile browsers and ambiguous upstream words are not matched", (
     "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 15; SM-S928B) AppleWebKit/537.36 SamsungBrowser/28.0 Chrome/130.0 Mobile Safari/537.36",
     "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Linux; Android 8.0.0; SM-G950F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.99 Mobile Safari/537.36",
     "Bolt Buddy Disco Evil Curious Firefox/151.0",
   ]) {
     assert.equal(
@@ -88,9 +96,9 @@ test("local intelligence is enabled by default and has no runtime feed", () => {
   );
 
   const stats = localStaticBotIntelStats();
-  assert.ok(stats.scannerAutomationMarkers >= 40);
-  assert.ok(stats.declaredBotMarkers >= 90);
-  assert.ok(stats.totalMarkers >= 130);
+  assert.ok(stats.scannerAutomationMarkers >= 48);
+  assert.ok(stats.declaredBotMarkers >= 146);
+  assert.ok(stats.totalMarkers >= 194);
   assert.equal(stats.mode, "vendored_local");
   assert.equal(stats.runtimeExternalDependency, false);
   assert.doesNotMatch(intelligence, /\bfetch\s*\(/);

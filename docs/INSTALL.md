@@ -63,6 +63,7 @@ ALLOWED_COUNTRIES=ES
 MOBILE_ONLY=true
 HUMANS_ONLY=true
 LOCAL_STATIC_BOT_INTEL_ENABLED=true
+LOCAL_REQUEST_SECURITY_ENABLED=true
 RATE_LIMIT_PER_MIN=3
 REDIRECT_ENFORCING=true
 HONEYPOT_ENFORCING=true
@@ -153,6 +154,9 @@ v7_redirect_requested: true
 v7_honeypot_enforcing: true
 v7_local_static_bot_intel_enabled: true
 v7_local_static_bot_intel_runtime_external_dependency: false
+v7_local_request_security_enabled: true
+v7_local_request_security_implementation: independent_local
+v7_local_request_security_runtime_external_dependency: false
 v7_community_intel_upstream_enabled: true
 v7_community_intel_hard_block_enabled: true
 m22_asn_hard_block_enforcing: true
@@ -178,6 +182,10 @@ Normal browser support paths such as these are not honeypots:
 ```
 
 A controlled request to a honeypot such as `/.env` should be treated as hostile, skip AI, block the exact IP, and use `BLOCK_URL` when configured. Do this only from a test IP you can later unblock.
+
+An encoded traversal request such as `/?file=%252e%252e%252fetc%252fpasswd`
+should receive the same deterministic treatment. V7 evaluates it locally and
+does not contact or require another WAF/blocker project.
 
 A known hosting/VPN organization should be blocked by the infrastructure policy before country/browser AI.
 

@@ -20,7 +20,7 @@ V7 does not depend on one User-Agent regex or one AI answer. It uses several ind
 
 ```text
 exact-IP state
-→ honeypot paths
+→ local request-target security + honeypot paths
 → local static bot/scanner signatures
 → shared Community HARD ASN
 → local/static/external ASN intelligence
@@ -75,7 +75,14 @@ V7 combines:
 
 Hard infrastructure checks run before country and browser AI.
 
-### Global honeypot gate
+### Local request-target security and global honeypot gate
+
+Before browser or AI processing, V7 locally detects high-confidence request
+targets such as encoded or double-encoded path traversal, null-byte/CRLF
+injection, dangerous PHP/file stream wrappers, PHP runtime overrides, response
+splitting probes, command-download probes and secret-file queries. These rules
+were independently implemented after reviewing public WAF security categories;
+no external WAF project is downloaded, called or executed at runtime.
 
 V7 keeps the 40-path V6.3 honeypot baseline and adds an extended scanner-path layer for targets such as:
 
@@ -104,7 +111,7 @@ Normal browser paths such as `/favicon.ico` and `/robots.txt` are not honeypots.
 
 ### Local static bot intelligence
 
-V7 vendors a curated local set of 152 precise scanner, automation and
+V7 vendors a curated local set of 194 precise scanner, automation and
 self-declared crawler signatures. This layer does not download or call another
 blocker at runtime. With `HUMANS_ONLY=true`, declared bots such as `GPTBot`,
 `ClaudeBot`, `Googlebot`, `Bytespider` and `SemrushBot` are rejected before
@@ -313,6 +320,7 @@ ALLOWED_COUNTRIES=ES
 MOBILE_ONLY=true
 HUMANS_ONLY=true
 LOCAL_STATIC_BOT_INTEL_ENABLED=true
+LOCAL_REQUEST_SECURITY_ENABLED=true
 RATE_LIMIT_PER_MIN=3
 REDIRECT_ENFORCING=true
 OWNER_LEARNING_MODE=false
@@ -381,7 +389,7 @@ npx wrangler dev
 GET /_health
 ```
 
-reports major policy/readiness state including redirects, Telegram, exact-IP control, rate limiting, owner learning, local static bot intelligence, ASN intelligence, honeypots and Community Intelligence.
+reports major policy/readiness state including redirects, Telegram, exact-IP control, rate limiting, owner learning, local request security, local static bot intelligence, ASN intelligence, honeypots and Community Intelligence.
 
 ## Security
 

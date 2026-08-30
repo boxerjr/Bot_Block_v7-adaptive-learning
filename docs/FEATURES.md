@@ -8,7 +8,19 @@ Telegram/manual blocks and selected automatic blocks use a keyed HMAC identifier
 
 An already-blocked exact IP is rejected before the browser probe.
 
-## 2. Global honeypot paths
+## 2. Local request-target security and global honeypot paths
+
+V7 independently implements local checks for high-confidence exploit request
+targets: encoded/double-encoded traversal, null-byte and CRLF injection,
+`php://`/`file://` wrappers, PHP runtime overrides, response-splitting probes,
+command-download probes and secret/config file queries. These deterministic
+matches skip AI, block only the exact source IP and are never used as training
+labels. The raw query is not persisted.
+
+The security categories were reviewed against the public
+[`Cloudflare-WAF-Expressions`](https://github.com/sefinek/Cloudflare-WAF-Expressions/blob/main/rules/expressions.md)
+collection. V7 does not copy or execute its GPL-3.0 expressions or updater code
+and has no runtime dependency on that project.
 
 V7 contains the immutable V6.3 honeypot baseline plus an extended V7 layer for common scanner targets such as environment files, source-control metadata, credentials, admin panels, database dumps, backups and debug endpoints.
 
@@ -264,7 +276,7 @@ For an external request, the effective fast path is:
 
 ```text
 exact-IP block
-→ honeypot
+→ local request-target security + honeypot
 → local static bot/scanner signature
 → community HARD ASN
 → local/static/external HARD ASN + Org infrastructure

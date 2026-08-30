@@ -35,6 +35,11 @@ import {
   localStaticBotIntelEnabled,
   localStaticBotIntelStats,
 } from "./adaptive/local-static-bot-intelligence.js";
+import {
+  classifyLocalRequestThreat,
+  localRequestSecurityEnabled,
+  localRequestSecurityStats,
+} from "./adaptive/local-request-security.js";
 
 function waitUntil(ctx, promise) {
   if (ctx?.waitUntil) ctx.waitUntil(promise);
@@ -127,8 +132,8 @@ function honeypotMessage({ network, match, orgIntel, promotion }) {
   lines.push(
     "Decision: block",
     "ExactIP: auto-blocked",
-    "PolicyOrder: exact-IP → honeypot → local static UA → community ASN → ASN/Org → country → device → AI",
-    "AI: skipped — hostile path is deterministic",
+    "PolicyOrder: exact-IP → request-target security/honeypot → local static UA → community ASN → ASN/Org → country → device → AI",
+    "AI: skipped — hostile request target is deterministic",
     "DatasetEligible: false",
     "RawIP/UA stored: false"
   );
@@ -279,6 +284,7 @@ async function health(request, env, ctx) {
 
   const stats = honeypotRuleStats();
   const localBotIntel = localStaticBotIntelStats();
+  const localRequestSecurity = localRequestSecurityStats();
   const community = await getCommunityIntelligenceHealth(env);
   return Response.json(
     {
@@ -310,6 +316,18 @@ async function health(request, env, ctx) {
       v7_local_static_bot_intel_precedes_asn_country_ai: true,
       v7_local_static_bot_intel_raw_ua_stored: false,
       v7_local_static_bot_intel_training_eligible: false,
+      v7_local_request_security_enabled: localRequestSecurityEnabled(env),
+      v7_local_request_security_implementation:
+        localRequestSecurity.implementation,
+      v7_local_request_security_rule_categories:
+        localRequestSecurity.ruleCategories,
+      v7_local_request_security_query_secret_markers:
+        localRequestSecurity.querySecretMarkers,
+      v7_local_request_security_runtime_external_dependency:
+        localRequestSecurity.runtimeExternalDependency,
+      v7_local_request_security_auto_blocks_exact_ip: true,
+      v7_local_request_security_raw_query_stored: false,
+      v7_local_request_security_training_eligible: false,
       v7_community_intel_export_enabled: community.exportEnabled,
       v7_community_intel_upstream_enabled: community.upstreamEnabled,
       v7_community_intel_hard_block_enabled: community.hardBlockEnabled,
@@ -341,6 +359,13 @@ export default {
 
     const blocked = await globalExactIpBlock(request, env);
     if (blocked) return blocked;
+
+    if (localRequestSecurityEnabled(env)) {
+      const requestThreat = classifyLocalRequestThreat(request.url);
+      if (requestThreat.matched) {
+        return handleHoneypot(request, env, ctx, requestThreat);
+      }
+    }
 
     if (honeypotEnforcingEnabled(env)) {
       const match = classifyHoneypotPath(url.pathname);
