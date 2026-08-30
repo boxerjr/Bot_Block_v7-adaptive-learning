@@ -33,6 +33,14 @@ function validateHealth(data) {
   if (Number(data?.v7_monitor_body_limit_bytes) !== 120000) failures.push(`body_limit=${JSON.stringify(data?.v7_monitor_body_limit_bytes)}`);
   if (data?.v7_monitor_body_limit_checks_actual_bytes !== true) failures.push(`actual_body_limit=${JSON.stringify(data?.v7_monitor_body_limit_checks_actual_bytes)}`);
 
+  if (data?.v7_local_static_bot_intel_enabled !== true) failures.push(`local_static_bot_intel_enabled=${JSON.stringify(data?.v7_local_static_bot_intel_enabled)}`);
+  if (data?.v7_local_static_bot_intel_mode !== "vendored_local") failures.push(`local_static_bot_intel_mode=${JSON.stringify(data?.v7_local_static_bot_intel_mode)}`);
+  if (data?.v7_local_static_bot_intel_runtime_external_dependency !== false) failures.push(`local_static_bot_intel_external_dependency=${JSON.stringify(data?.v7_local_static_bot_intel_runtime_external_dependency)}`);
+  if (Number(data?.v7_local_static_bot_intel_total_markers) < 150) failures.push(`local_static_bot_intel_markers=${JSON.stringify(data?.v7_local_static_bot_intel_total_markers)}`);
+  if (data?.v7_local_static_bot_intel_precedes_asn_country_ai !== true) failures.push(`local_static_bot_intel_order=${JSON.stringify(data?.v7_local_static_bot_intel_precedes_asn_country_ai)}`);
+  if (data?.v7_local_static_bot_intel_raw_ua_stored !== false) failures.push(`local_static_bot_intel_raw_ua=${JSON.stringify(data?.v7_local_static_bot_intel_raw_ua_stored)}`);
+  if (data?.v7_local_static_bot_intel_training_eligible !== false) failures.push(`local_static_bot_intel_training=${JSON.stringify(data?.v7_local_static_bot_intel_training_eligible)}`);
+
   return failures;
 }
 
@@ -73,6 +81,10 @@ for (let attempt = 1; attempt <= attempts; attempt += 1) {
         v7_schema_missing_migrations: data.v7_schema_missing_migrations,
         v7_monitor_token_exact_ip_bound: data.v7_monitor_token_exact_ip_bound,
         v7_enforcement_ip_source: data.v7_enforcement_ip_source,
+        v7_local_static_bot_intel_enabled: data.v7_local_static_bot_intel_enabled,
+        v7_local_static_bot_intel_mode: data.v7_local_static_bot_intel_mode,
+        v7_local_static_bot_intel_total_markers: data.v7_local_static_bot_intel_total_markers,
+        v7_local_static_bot_intel_runtime_external_dependency: data.v7_local_static_bot_intel_runtime_external_dependency,
       }, null, 2));
       process.exit(0);
     }

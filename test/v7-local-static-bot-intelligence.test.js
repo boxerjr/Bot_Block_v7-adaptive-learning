@@ -24,6 +24,10 @@ const wranglerExample = readFileSync(
   new URL("../wrangler.example.jsonc", import.meta.url),
   "utf8"
 );
+const productionSmoke = readFileSync(
+  new URL("../scripts/production-smoke.mjs", import.meta.url),
+  "utf8"
+);
 
 test("precise scanners and automation clients hard-block locally", () => {
   for (const ua of [
@@ -132,4 +136,17 @@ test("production wrapper enforces a local signature immediately", async () => {
 
   assert.equal(response.status, 302);
   assert.equal(response.headers.get("location"), "https://blocked.example/");
+});
+
+test("production smoke requires the deployed local intelligence layer", () => {
+  assert.match(productionSmoke, /v7_local_static_bot_intel_enabled/);
+  assert.match(productionSmoke, /v7_local_static_bot_intel_mode/);
+  assert.match(productionSmoke, /v7_local_static_bot_intel_total_markers/);
+  assert.match(
+    productionSmoke,
+    /v7_local_static_bot_intel_runtime_external_dependency/
+  );
+  assert.match(productionSmoke, /v7_local_static_bot_intel_precedes_asn_country_ai/);
+  assert.match(productionSmoke, /v7_local_static_bot_intel_raw_ua_stored/);
+  assert.match(productionSmoke, /v7_local_static_bot_intel_training_eligible/);
 });
