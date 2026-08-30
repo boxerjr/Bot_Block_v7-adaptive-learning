@@ -14,6 +14,10 @@ const entry = readFileSync(
   new URL("../src/v7-owner-timeout-entry.js", import.meta.url),
   "utf8"
 );
+const globalEntry = readFileSync(
+  new URL("../src/v7-global-honeypot-entry.js", import.meta.url),
+  "utf8"
+);
 const wrangler = readFileSync(
   new URL("../wrangler.jsonc", import.meta.url),
   "utf8"
@@ -55,9 +59,12 @@ test("production wrapper arms timers only for owner learning HUMAN_PASS controls
   assert.match(entry, /scheduleOwnerConfirmation/);
 });
 
-test("Cloudflare runs the timeout sweep every minute", () => {
+test("Cloudflare runs the timeout sweep every minute through the global wrapper", () => {
   assert.match(entry, /async scheduled/);
   assert.match(entry, /processOwnerLearningTimeouts/);
-  assert.match(wrangler, /"main": "src\/v7-owner-timeout-entry\.js"/);
+  assert.match(wrangler, /"main": "src\/v7-global-honeypot-entry\.js"/);
+  assert.match(globalEntry, /import worker from "\.\/v7-owner-timeout-entry\.js"/);
+  assert.match(globalEntry, /typeof worker\.scheduled === "function"/);
+  assert.match(globalEntry, /worker\.scheduled\(controller, env, ctx\)/);
   assert.match(wrangler, /"crons": \["\* \* \* \* \*"\]/);
 });
