@@ -1,306 +1,74 @@
-# V7 Adaptive Learning
+# 🛡️ Bot Block V7
 
-**Adaptive AI anti-bot and traffic policy engine for Cloudflare Workers.**
+### Adaptive AI edge defense for Cloudflare Workers
 
-V7 combines deterministic edge policy, browser/device consistency checks, Workers AI, adaptive D1 reputation, operator feedback, Telegram controls, ASN/organization intelligence, global honeypots, shared community intelligence, and privacy-preserving exact-IP state.
+[![V7 regression tests](https://github.com/boxerjr/Bot_Block_v7-adaptive-learning/actions/workflows/m22-public-monitor-tests.yml/badge.svg?branch=main)](https://github.com/boxerjr/Bot_Block_v7-adaptive-learning/actions/workflows/m22-public-monitor-tests.yml)
+[![Production smoke](https://github.com/boxerjr/Bot_Block_v7-adaptive-learning/actions/workflows/v7-production-smoke.yml/badge.svg?branch=main)](https://github.com/boxerjr/Bot_Block_v7-adaptive-learning/actions/workflows/v7-production-smoke.yml)
+[![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-f38020?logo=cloudflare&logoColor=white)](https://workers.cloudflare.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-1f883d.svg)](LICENSE)
 
-It is built for a strict policy: accept traffic consistent with a real person on a permitted consumer/mobile Internet connection and reject obvious hosting, VPN, proxy, scanner, automation, spoof, and policy-violating traffic as early as possible.
+**Bot Block V7** is a layered anti-bot and traffic-policy engine for Cloudflare Workers. It combines deterministic edge controls, browser/device consistency checks, Workers AI, adaptive D1 reputation, operator feedback, Telegram controls, ASN/organization intelligence, honeypots and privacy-preserving exact-IP state.
 
-> V7 is not a claim of perfect bot detection. It is a layered enforcement and learning system designed to reduce obvious hostile traffic before expensive inspection, then improve decisions through explicit feedback and reputation.
+It is built for a clear operating model: allow traffic that is consistent with a real person on an allowed connection, and stop obvious hosting, VPN, proxy, scanner, automation, spoofing and policy-violating traffic as early as possible.
 
-## Current status
+> V7 does not promise perfect bot detection. It gives you independent, inspectable layers that make cheap decisions first, keep AI in an evidence role, and learn from explicit operator feedback.
 
-**V7 production stack — active development, production deployed.**
+## Why people test V7
 
-The historical V6.3 production deployment is intentionally separate and is not modified by this repository.
+- **Fast at the edge:** deterministic checks run before browser inspection or AI.
+- **No runtime dependency on another blocker:** local request security and bot intelligence are shipped in the Worker.
+- **Production-shaped:** redirect enforcement, cron maintenance, health reporting, D1 migrations and smoke checks are included.
+- **Privacy-first learning:** raw IPs and raw User-Agents are not persisted; shared intelligence is ASN-level only.
+- **Operator control:** Telegram can block/unblock an exact IP and controlled owner sessions can confirm `IT'S ME` or `NOT ME`.
+- **Easy to fork:** one repository, one example Wrangler config, explicit secrets and a reproducible test suite.
 
-## What makes V7 different
+## At a glance
 
-V7 does not depend on one User-Agent regex or one AI answer. It uses several independent layers:
+| Component | Included implementation |
+| --- | --- |
+| Runtime | Cloudflare Worker (JavaScript) |
+| AI | Workers AI with sanitized evidence |
+| State | Cloudflare D1; R2 for controlled dataset captures |
+| Intelligence | Local signatures, ASN/org policy, Spamhaus refresh, optional V7 community feed |
+| Operator controls | Telegram callbacks (optional) |
+| Verification | 172 regression tests + migration verification + production smoke workflow |
+| License | MIT |
 
-```text
-exact-IP state
-→ local request-target security + honeypot paths
-→ local static bot/scanner signatures
-→ shared Community HARD ASN
-→ local/static/external ASN intelligence
-→ organization intelligence
-→ country policy
-→ mobile/device policy
-→ rate + browser consistency + fingerprint
-→ Workers AI
-→ adaptive D1 reputation
-→ final redirect
+## Decision pipeline
+
+```mermaid
+flowchart LR
+  A[Request] --> B[Exact-IP + request security]
+  B --> C[Honeypot + bot + ASN + country policy]
+  C --> D[Browser/device + Workers AI]
+  D --> E[Adaptive D1 reputation]
+  E --> F[Allow, review or block]
 ```
 
-The objective is simple: **do cheap deterministic checks first and spend browser/AI work only on traffic that survives them.**
+The rule is simple: **spend expensive browser/AI work only on traffic that survives deterministic policy.**
 
-## Major features
+## Install and test on a new Cloudflare account
 
-### Infrastructure intelligence
-
-V7 classifies Cloudflare `asOrganization` metadata into classes such as:
-
-```text
-consumer_isp
-mobile_carrier
-hosting_cloud
-vpn_proxy
-unknown
-```
-
-Under the default strict policy:
-
-```text
-hosting_cloud → BLOCK + ASN promoted to HARD
-vpn_proxy     → BLOCK + ASN promoted to HARD
-consumer_isp  → continue inspection
-mobile_carrier→ continue inspection
-```
-
-Known hosting/cloud examples include IONOS, DigitalOcean, OVH, Hetzner, Vultr, Linode, Leaseweb, Contabo, AWS, Google Cloud, Azure and Oracle Cloud.
-
-Known Spanish access-network examples include Telefonica/Movistar, Digi, Orange, Vodafone, Jazztel, MasMovil, Euskaltel and others.
-
-A real person using a VPN/VPS/cloud connection is intentionally denied when the strict infrastructure policy is enabled.
-
-### ASN intelligence
-
-V7 combines:
-
-- V6.3 static `HARD_ASNS`, `RISK_ASNS`, and `SAFE_ASNS`
-- dynamic `org_auto_hard` ASN promotion
-- Spamhaus ASN-DROP operational intelligence
-- V7 Community Intelligence
-
-Hard infrastructure checks run before country and browser AI.
-
-### Local request-target security and global honeypot gate
-
-Before browser or AI processing, V7 locally detects high-confidence request
-targets such as encoded or double-encoded path traversal, null-byte/CRLF
-injection, dangerous PHP/file stream wrappers, PHP runtime overrides, response
-splitting probes, command-download probes and secret-file queries. These rules
-were independently implemented after reviewing public WAF security categories;
-no external WAF project is downloaded, called or executed at runtime.
-
-V7 keeps the 40-path V6.3 honeypot baseline and adds an extended scanner-path layer for targets such as:
-
-```text
-/.env
-/.git/config
-/.ssh/id_rsa
-/wp-admin
-/phpmyadmin
-/secrets
-/backup.zip
-/actuator/env
-/solr/admin
-```
-
-A matching request is deterministic hostile-path evidence:
-
-```text
-honeypot
-→ AI skipped
-→ exact IP HMAC block
-→ BLOCK_URL or blank 404 fallback
-```
-
-Normal browser paths such as `/favicon.ico` and `/robots.txt` are not honeypots.
-
-### Local static bot intelligence
-
-V7 vendors a curated local set of 194 precise scanner, automation and
-self-declared crawler signatures. This layer does not download or call another
-blocker at runtime. With `HUMANS_ONLY=true`, declared bots such as `GPTBot`,
-`ClaudeBot`, `Googlebot`, `Bytespider` and `SemrushBot` are rejected before
-ASN, country, browser and AI processing. High-confidence tools such as
-`sqlmap`, `masscan`, `Acunetix` and headless automation are always rejected.
-
-Ambiguous short names and upstream raw-IP/referrer lists are deliberately not
-included. Matches do not become learning labels and do not change ASN
-reputation.
-
-### Community Intelligence
-
-Separate V7 deployments can share a privacy-safe ASN intelligence feed through this repository.
-
-Shared `HARD` entries are restricted to V7-derived hosting/VPN/proxy infrastructure. Strong operator feedback can create shared `RISK` records only after strict consensus thresholds; feedback alone cannot globally hard-block an ASN.
-
-The shared feed never contains:
-
-```text
-raw IP
-raw User-Agent
-fingerprint ID
-browser telemetry
-event ID
-Telegram data
-secrets
-```
-
-Third-party Spamhaus records are also excluded from the GitHub community export.
-
-See [`docs/COMMUNITY_INTELLIGENCE.md`](docs/COMMUNITY_INTELLIGENCE.md).
-
-### Browser and device inspection
-
-Traffic that survives deterministic policy enters a silent browser inspection stage. V7 checks device/browser coherence, local spoof signals, fingerprint history and related browser evidence instead of trusting the User-Agent alone.
-
-### Workers AI
-
-Workers AI receives sanitized evidence plus network/organization context and produces classification/risk guidance.
-
-**AI output never becomes a truth label by itself.**
-
-### Adaptive D1 learning
-
-Explicit feedback updates ASN and fingerprint reputation using labels including:
-
-```text
-human_confirmed
-bot_confirmed
-spoof_confirmed
-false_positive
-false_negative
-uncertain
-```
-
-Evidence decays over time. Fingerprint evidence decays faster than ASN evidence.
-
-This is immediate reputation learning — it is not retraining the Llama model after each click.
-
-### Telegram controls
-
-Standard operator controls:
-
-```text
-🚫 BLOCK IP
-🔓 UNBLOCK IP
-```
-
-An operator block on an originally allowed event is recorded as a `false_negative` correction and rebuilds relevant reputation.
-
-### Controlled OWNER learning
-
-Default:
-
-```text
-OWNER_LEARNING_MODE=false
-```
-
-During an explicitly controlled owner-only session, `HUMAN_PASS` can expose:
-
-```text
-✅ IT'S ME
-❌ NOT ME
-```
-
-`IT'S ME` records `human_confirmed` with confidence 100.
-
-`NOT ME` records `false_negative` with confidence 100 and exact-IP blocks the request source.
-
-If no `IT'S ME` confirmation arrives inside the three-minute deadline, the controlled pending event becomes automatic `NOT ME`. If the timer write races with the callback, V7 verifies the original event timestamp and applies the same three-minute deadline. Keep this mode **off** during uncontrolled public traffic.
-
-### Exact-IP privacy-preserving state
-
-Manual and automatic exact-IP state uses a keyed HMAC identifier rather than a raw IP database column.
-
-### Rate limiting
-
-Default:
-
-```text
-RATE_LIMIT_PER_MIN=3
-```
-
-The fourth request inside the rolling window triggers an exact-IP automatic block. Unblocking also clears stale limiter state.
-
-### Redirect enforcement
-
-With `REDIRECT_ENFORCING=true`:
-
-```text
-confirmed human → ORIGIN_URL
-blocked/review  → BLOCK_URL
-```
-
-Redirect destinations are Cloudflare secrets, must be HTTPS, and are protected by a loop guard.
-
-If `BLOCK_URL` is unavailable, blocked traffic falls back to a blank 404 response.
-
-## Privacy model
-
-Ordinary public monitor traffic remains operational observation only:
-
-```text
-D1 operational observations: yes
-R2 public training writes: no
-dataset_eligible: false
-training_eligible: false
-AI decisions as truth labels: no
-raw IP persistence: no
-raw UA persistence: no
-raw full telemetry persistence: no
-```
-
-Controlled dataset-eligible captures remain a separate admin path.
-
-## Install on a new Cloudflare account
-
-Start here:
-
-**[`docs/INSTALL.md`](docs/INSTALL.md)**
-
-The short version is:
+The complete, copy/paste installation guide is [`docs/INSTALL.md`](docs/INSTALL.md). The shortest safe path is:
 
 ```bash
-git clone https://github.com/boxerjr/v7-adaptive-learning.git
-cd v7-adaptive-learning
+git clone https://github.com/boxerjr/Bot_Block_v7-adaptive-learning.git
+cd Bot_Block_v7-adaptive-learning
 npm install
+cp wrangler.example.jsonc wrangler.jsonc
 npx wrangler login
+```
+
+Create fresh resources for this installation:
+
+```bash
 npx wrangler d1 create v7-adaptive-learning
 npx wrangler r2 bucket create v7-adaptive-dataset
 ```
 
-Then copy `wrangler.example.jsonc`, insert **your own** D1 database ID, configure the Cloudflare secrets, apply migrations, run tests and deploy:
+Copy the D1 `database_id` printed by Wrangler into `wrangler.jsonc` in place of `REPLACE_WITH_YOUR_D1_DATABASE_ID`. The Worker name in `wrangler.jsonc` is only a deployment label: keep `v7-adaptive-learning` or change it to any unique name you prefer.
 
-```bash
-npm run d1:migrate:remote
-npm test
-npm run deploy
-```
-
-Do not reuse another installation's D1 ID or secrets.
-
-## Required Cloudflare bindings
-
-```text
-Workers AI → AI
-D1         → DB
-R2         → DATASET
-```
-
-## Cloudflare secrets
-
-Core production secrets:
-
-```text
-CHALLENGE_SECRET
-ADMIN_SECRET
-ORIGIN_URL
-BLOCK_URL
-```
-
-Telegram, when used:
-
-```text
-TELEGRAM_TOKEN
-TELEGRAM_CHAT_ID
-```
-
-Example:
+Set the four required secrets. Redirect destinations must be HTTPS:
 
 ```bash
 npx wrangler secret put CHALLENGE_SECRET
@@ -309,94 +77,149 @@ npx wrangler secret put ORIGIN_URL
 npx wrangler secret put BLOCK_URL
 ```
 
-Never commit real secret values.
+Optional Telegram controls:
 
-## Important runtime defaults
-
-Current strict defaults include:
-
-```text
-ALLOWED_COUNTRIES=ES
-MOBILE_ONLY=true
-HUMANS_ONLY=true
-LOCAL_STATIC_BOT_INTEL_ENABLED=true
-LOCAL_REQUEST_SECURITY_ENABLED=true
-RATE_LIMIT_PER_MIN=3
-REDIRECT_ENFORCING=true
-OWNER_LEARNING_MODE=false
-ASN_HARD_BLOCK_ENABLED=true
-ASN_SPAMHAUS_DROP_ENABLED=true
-ORG_INFRASTRUCTURE_HARD_BLOCK_ENABLED=true
-HONEYPOT_ENFORCING=true
-COMMUNITY_INTEL_EXPORT_ENABLED=true
-COMMUNITY_INTEL_ENABLED=true
-COMMUNITY_INTEL_HARD_BLOCK_ENABLED=true
+```bash
+npx wrangler secret put TELEGRAM_TOKEN
+npx wrangler secret put TELEGRAM_CHAT_ID
 ```
 
-See `wrangler.example.jsonc` for a reusable installation template.
+Run the release verification and deploy:
 
-## Community feed publishing
-
-The Worker exposes a sanitized export at:
-
-```text
-/_community/intelligence.json
+```bash
+npm run verify
+npm run deploy
 ```
 
-This repository contains an optional GitHub Actions publisher. Configure the repository secret:
+After deployment, check `https://YOUR-WORKER-DOMAIN/_health`. Never reuse another installation's D1 ID, R2 bucket, redirect destinations or secrets.
+
+## Safe defaults to review
+
+The example config is intentionally strict for a Spain-only mobile deployment. Change these values before protecting a different audience:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ALLOWED_COUNTRIES` | `ES` | Comma-separated country allow-list |
+| `MOBILE_ONLY` | `true` | Reject desktop claims before deep inspection |
+| `HUMANS_ONLY` | `true` | Reject precise bot/crawler declarations |
+| `LOCAL_STATIC_BOT_INTEL_ENABLED` | `true` | Enable the bundled 194-signature layer |
+| `LOCAL_REQUEST_SECURITY_ENABLED` | `true` | Enable independent request-target protections |
+| `HONEYPOT_ENFORCING` | `true` | Enforce the global honeypot gate |
+| `RATE_LIMIT_PER_MIN` | `3` | Fourth request in a rolling minute blocks that exact IP |
+| `REDIRECT_ENFORCING` | `true` | Send allowed traffic to `ORIGIN_URL`, blocked traffic to `BLOCK_URL` |
+| `OWNER_LEARNING_MODE` | `false` | Keep off except during a controlled owner-only session |
+
+See [`wrangler.example.jsonc`](wrangler.example.jsonc) for every runtime variable. Keep `OWNER_LEARNING_MODE=false` for public traffic.
+
+## What is inside the defense
+
+### Deterministic infrastructure policy
+
+Cloudflare `asOrganization` metadata is classified into `consumer_isp`, `mobile_carrier`, `hosting_cloud`, `vpn_proxy` and `unknown`. Known hosting/VPN/cloud networks are blocked early and can be promoted to a local `HARD` ASN decision. Consumer and mobile providers continue to the next layer; they are never treated as proof of a human by themselves.
+
+V7 combines V6.3 static `HARD_ASNS`, `RISK_ASNS` and `SAFE_ASNS`, deterministic organization promotion, a daily Spamhaus ASN-DROP refresh and optional V7 Community Intelligence.
+
+### Local request security and honeypots
+
+Before browser or AI processing, V7 detects high-confidence request targets such as encoded or double-encoded traversal, null-byte/CRLF injection, dangerous PHP/file wrappers, PHP runtime overrides, response-splitting probes, command-download probes and secret-file queries.
+
+The global honeypot gate preserves the 40-path V6.3 baseline and adds scanner targets such as:
 
 ```text
-V7_COMMUNITY_FEED_URL
+/.env              /.git/config       /.ssh/id_rsa
+/wp-admin          /phpmyadmin        /secrets
+/backup.zip        /actuator/env      /solr/admin
 ```
 
-with the deployed export URL. Every six hours, the workflow validates the privacy/schema invariants and updates only:
+A match is handled locally: AI is skipped, the exact IP HMAC is blocked, and the request goes to `BLOCK_URL` (or a blank 404 fallback). Normal support paths such as `/favicon.ico` and `/robots.txt` are not honeypots.
 
-```text
-community-feed branch
-└── community/intelligence.json
+These protections are independently implemented from public WAF security categories. No external blocker project is downloaded, called or executed at runtime.
+
+### Bundled local bot intelligence
+
+The Worker ships a curated set of **194 precise** scanner, automation and self-declared crawler signatures. With `HUMANS_ONLY=true`, identifiers such as `GPTBot`, `ClaudeBot`, `Googlebot`, `Bytespider`, `SemrushBot`, `sqlmap`, `masscan`, `Acunetix` and headless automation are rejected before ASN, country, browser and AI processing.
+
+Ambiguous short words and upstream raw-IP/referrer lists are intentionally excluded. A local signature match is an enforcement signal, not a learning label and not an ASN reputation update.
+
+### Browser, device and Workers AI evidence
+
+Traffic that survives deterministic policy enters silent browser inspection. V7 checks device/browser coherence, spoof signals, fingerprint history and related evidence instead of trusting the User-Agent alone. Workers AI receives sanitized evidence plus network/organization context and returns classification guidance.
+
+**AI is evidence, never truth by itself.**
+
+### Adaptive D1 reputation
+
+Explicit feedback can update ASN and fingerprint reputation with labels such as `human_confirmed`, `bot_confirmed`, `spoof_confirmed`, `false_positive`, `false_negative` and `uncertain`. Evidence decays over time, with fingerprint evidence decaying faster than ASN evidence.
+
+This is immediate reputation learning; it does not retrain the Llama model after every click.
+
+### Telegram and controlled owner learning
+
+Telegram supports signed, event-bound callbacks for `BLOCK IP` and `UNBLOCK IP`. In an explicitly controlled owner-only session, `HUMAN_PASS` can expose `✅ IT'S ME` and `❌ NOT ME`:
+
+- `IT'S ME` records `human_confirmed` with confidence 100.
+- `NOT ME` records `false_negative` with confidence 100 and blocks the exact IP.
+- No confirmation inside three minutes becomes automatic `NOT ME`.
+- Callback/timer races are checked against the original event timestamp.
+
+The mode is fail-closed and defaults to off. Do not enable it for uncontrolled public traffic.
+
+### Privacy-preserving Community Intelligence
+
+Separate V7 deployments can share an ASN-only feed through [`community-feed`](https://github.com/boxerjr/Bot_Block_v7-adaptive-learning/tree/community-feed). The export never contains raw IPs, raw User-Agents, fingerprints, browser telemetry, event IDs, Telegram data or secrets. Shared `HARD` entries are limited to V7-derived hosting/VPN/proxy infrastructure; strong feedback consensus can create `RISK`, never global `HARD` by itself.
+
+The Worker export is available at `/_community/intelligence.json`. The optional publisher workflow validates the privacy/schema invariants and writes only the `community-feed` branch.
+
+## Verify it yourself
+
+Run the local suite:
+
+```bash
+npm test                 # 172 passing tests
+npm run test:migrations  # local D1 migration check
+npm run verify           # both release checks
 ```
 
-The data publisher never writes directly to protected production `main`.
+For a disposable test IP, these smoke checks demonstrate the main boundaries:
 
-## Full feature reference
+1. Visit `/` with a normal browser: it enters the browser inspection flow.
+2. Visit `/.env`: it is treated as a hostile honeypot, skips AI and blocks the exact IP.
+3. Request `/?file=%252e%252e%252fetc%252fpasswd`: encoded traversal is classified locally.
+4. Send a precise scanner User-Agent such as `sqlmap`: it is rejected by local intelligence.
+5. Request `/favicon.ico` or `/robots.txt`: neither is a honeypot.
+6. Open `/_health`: verify redirect, honeypot, local security, local intelligence, ASN and Community Intelligence readiness.
 
-See **[`docs/FEATURES.md`](docs/FEATURES.md)** for the detailed decision flow and behavior of every major layer.
+Use only a disposable test IP for hostile-path checks so you can unblock it from Telegram or D1 tooling afterwards.
+
+## Documentation map
+
+- [`docs/INSTALL.md`](docs/INSTALL.md) — clean-account setup, secrets, migrations and deployment
+- [`docs/FEATURES.md`](docs/FEATURES.md) — complete decision order and feature reference
+- [`docs/COMMUNITY_INTELLIGENCE.md`](docs/COMMUNITY_INTELLIGENCE.md) — feed schema, privacy rules and publisher
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — runtime boundaries and data flow
+- [`SECURITY.md`](SECURITY.md) — security reporting and sensitive-data rules
 
 ## Repository layout
 
 ```text
-src/compat/v63/      V6.3 compatibility logic
-src/adaptive/        reputation, intelligence, feedback, fingerprints, Telegram, redirects
+src/compat/v63/      V6.3 compatibility policy
+src/adaptive/        reputation, intelligence, feedback, Telegram, redirects
 src/storage/         D1/R2 persistence helpers
 migrations/          D1 schema
 legacy/              archived V6.3 reference
-docs/                install, architecture, validation and feature documentation
+docs/                install, architecture, validation and feature guides
 test/                regression tests
-community-feed       sanitized shared intelligence data branch
+community-feed       sanitized shared intelligence branch
 ```
-
-## Development
-
-```bash
-npm install
-npm test
-npx wrangler dev
-```
-
-## Production health
-
-```text
-GET /_health
-```
-
-reports major policy/readiness state including redirects, Telegram, exact-IP control, rate limiting, owner learning, local request security, local static bot intelligence, ASN intelligence, honeypots and Community Intelligence.
-
-## Security
-
-Do not open issues containing tokens, credentials, raw IP lists, private telemetry, redirect secrets or Telegram secrets.
-
-See [`SECURITY.md`](SECURITY.md).
 
 ## Project philosophy
 
-V7 treats **AI as evidence, not truth**; **operator feedback as explicit truth**; **deterministic infrastructure policy as the cheapest first line**; and **shared intelligence as aggregate ASN-level data, never visitor-level data**.
+**AI is evidence, not truth.**
+
+**Operator feedback is explicit truth.**
+
+**Deterministic infrastructure policy is the cheapest first line.**
+
+**Shared intelligence is aggregate ASN data, never visitor-level data.**
+
+If you test V7, please open an issue with reproducible behavior (without tokens, redirect secrets, raw IP lists or private telemetry). Contributions that improve detection without weakening privacy or fail-closed controls are welcome.
