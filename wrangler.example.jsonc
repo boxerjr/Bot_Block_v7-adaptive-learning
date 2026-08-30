@@ -51,7 +51,7 @@
     {
       "binding": "DB",
       "database_name": "v7-adaptive-learning",
-      "database_id": "cbc40c25-cb43-4bd1-bb7c-b7963b7425c7",
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
       "migrations_dir": "migrations"
     }
   ],

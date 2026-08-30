@@ -1,0 +1,87 @@
+name: Publish community intelligence
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check publisher configuration
+        id: config
+        env:
+          FEED_URL: ${{ secrets.V7_COMMUNITY_FEED_URL }}
+        run: |
+          if [ -z "$FEED_URL" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "V7_COMMUNITY_FEED_URL is not configured; skipping publish."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout community feed branch
+        if: steps.config.outputs.configured == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: community-feed
+          fetch-depth: 0
+
+      - name: Fetch sanitized Worker export
+        if: steps.config.outputs.configured == 'true'
+        env:
+          FEED_URL: ${{ secrets.V7_COMMUNITY_FEED_URL }}
+        run: |
+          curl --fail --silent --show-error --location --max-time 30 \
+            "$FEED_URL" \
+            --output /tmp/v7-community-intelligence.json
+
+      - name: Validate privacy and schema
+        if: steps.config.outputs.configured == 'true'
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = '/tmp/v7-community-intelligence.json';
+          const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+          if (data.schema_version !== 1 || data.ready !== true) {
+            throw new Error('Unexpected community intelligence schema or export not ready');
+          }
+          for (const key of ['raw_ip', 'user_agent', 'fingerprint', 'telemetry', 'event_ids']) {
+            if (data.privacy?.[key] !== false) throw new Error(`Privacy invariant failed: ${key}`);
+          }
+          const hard = Array.isArray(data.hard_asns) ? data.hard_asns : [];
+          const risk = Array.isArray(data.risk_asns) ? data.risk_asns : [];
+          if (hard.length + risk.length > 20000) throw new Error('Feed too large');
+          for (const entry of hard) {
+            if (!/^AS\d+$/.test(String(entry.asn || ''))) throw new Error('Invalid HARD ASN');
+            if (entry.source !== 'v7_org_infrastructure') throw new Error('Unapproved HARD source');
+          }
+          for (const entry of risk) {
+            if (!/^AS\d+$/.test(String(entry.asn || ''))) throw new Error('Invalid RISK ASN');
+            if (entry.source !== 'v7_feedback_consensus') throw new Error('Unapproved RISK source');
+            if (Number(entry.feedback_count || 0) < 8) throw new Error('Insufficient feedback consensus');
+          }
+          const serialized = JSON.stringify(data).toLowerCase();
+          for (const forbidden of ['raw_ip', 'user_agent_stored', 'fingerprint_id', 'raw_telemetry', 'event_id']) {
+            if (serialized.includes(`"${forbidden}":`)) throw new Error(`Forbidden field: ${forbidden}`);
+          }
+          fs.mkdirSync('community', { recursive: true });
+          fs.writeFileSync('community/intelligence.json', JSON.stringify(data, null, 2) + '\n');
+          NODE
+
+      - name: Publish only when feed changed
+        if: steps.config.outputs.configured == 'true'
+        run: |
+          if git diff --quiet -- community/intelligence.json; then
+            echo "Community intelligence unchanged."
+            exit 0
+          fi
+          git config user.name "v7-community-intel[bot]"
+          git config user.email "v7-community-intel[bot]@users.noreply.github.com"
+          git add community/intelligence.json
+          git commit -m "Update sanitized community intelligence"
+          git push origin HEAD:community-feed
