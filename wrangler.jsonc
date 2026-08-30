@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "v7-adaptive-learning",
-  "main": "src/v7-global-honeypot-entry.js",
+  "main": "src/v7-release-hardening-entry.js",
   "compatibility_date": "2026-08-29",
 
   "vars": {
