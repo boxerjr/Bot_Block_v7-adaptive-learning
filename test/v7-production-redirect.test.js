@@ -15,6 +15,10 @@ const timeoutWrapper = readFileSync(
   new URL("../src/v7-owner-timeout-entry.js", import.meta.url),
   "utf8"
 );
+const globalWrapper = readFileSync(
+  new URL("../src/v7-global-honeypot-entry.js", import.meta.url),
+  "utf8"
+);
 const wrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
 
 const env = {
@@ -178,7 +182,8 @@ test("production wrapper redirects after browser probe and wrangler exposes no t
   assert.match(production, /chooseFinalRedirect/);
   assert.match(production, /response\.status === 404/);
   assert.match(production, /BLOCK_URL_OR_404_FALLBACK/);
-  assert.match(wrangler, /"main": "src\/v7-owner-timeout-entry\.js"/);
+  assert.match(wrangler, /"main": "src\/v7-global-honeypot-entry\.js"/);
+  assert.match(globalWrapper, /import worker from "\.\/v7-owner-timeout-entry\.js"/);
   assert.match(timeoutWrapper, /import productionWorker from "\.\/v7-production-entry\.js"/);
   assert.match(timeoutWrapper, /productionWorker\.fetch\(request, env, ctx\)/);
   assert.match(wrangler, /"REDIRECT_ENFORCING": "true"/);
