@@ -10,6 +10,10 @@ const entry = readFileSync(
   new URL("../src/v7-global-honeypot-entry.js", import.meta.url),
   "utf8"
 );
+const releaseEntry = readFileSync(
+  new URL("../src/v7-release-hardening-entry.js", import.meta.url),
+  "utf8"
+);
 const wrangler = readFileSync(
   new URL("../wrangler.jsonc", import.meta.url),
   "utf8"
@@ -84,9 +88,11 @@ test("hosting or VPN honeypot hit can still promote ASN hard, consumer ISP does 
   assert.match(entry, /consumer\/mobile ASN is not poisoned by one path probe/);
 });
 
-test("production entry and honeypot toggle are enabled", () => {
-  assert.match(wrangler, /"main": "src\/v7-global-honeypot-entry\.js"/);
-  assert.match(wrangler, /"HONEYPOT_ENFORCING": "true"/);
+test("production release entry preserves global honeypot and cron wrapper", () => {
+  assert.match(wrangler, /"main"\s*:\s*"src\/v7-release-hardening-entry\.js"/);
+  assert.match(releaseEntry, /import worker from "\.\/v7-global-honeypot-entry\.js"/);
+  assert.match(releaseEntry, /worker\.scheduled\(controller, env, ctx\)/);
+  assert.match(wrangler, /"HONEYPOT_ENFORCING"\s*:\s*"true"/);
   assert.match(entry, /worker\.scheduled/);
 });
 
