@@ -1,5 +1,5 @@
 const DEFAULT_UPSTREAM_URL =
-  "https://raw.githubusercontent.com/boxerjr/v7-adaptive-learning/community-feed/community/intelligence.json";
+  "https://raw.githubusercontent.com/boxerjr/Bot_Block_v7-adaptive-learning/community-feed/community/intelligence.json";
 const REFRESH_MS = 6 * 60 * 60 * 1000;
 const FEED_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_FEED_ENTRIES = 10_000;
