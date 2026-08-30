@@ -41,6 +41,14 @@ function validateHealth(data) {
   if (data?.v7_local_static_bot_intel_raw_ua_stored !== false) failures.push(`local_static_bot_intel_raw_ua=${JSON.stringify(data?.v7_local_static_bot_intel_raw_ua_stored)}`);
   if (data?.v7_local_static_bot_intel_training_eligible !== false) failures.push(`local_static_bot_intel_training=${JSON.stringify(data?.v7_local_static_bot_intel_training_eligible)}`);
 
+  if (data?.v7_local_request_security_enabled !== true) failures.push(`local_request_security_enabled=${JSON.stringify(data?.v7_local_request_security_enabled)}`);
+  if (data?.v7_local_request_security_implementation !== "independent_local") failures.push(`local_request_security_implementation=${JSON.stringify(data?.v7_local_request_security_implementation)}`);
+  if (Number(data?.v7_local_request_security_rule_categories) < 8) failures.push(`local_request_security_categories=${JSON.stringify(data?.v7_local_request_security_rule_categories)}`);
+  if (data?.v7_local_request_security_runtime_external_dependency !== false) failures.push(`local_request_security_external_dependency=${JSON.stringify(data?.v7_local_request_security_runtime_external_dependency)}`);
+  if (data?.v7_local_request_security_auto_blocks_exact_ip !== true) failures.push(`local_request_security_exact_ip=${JSON.stringify(data?.v7_local_request_security_auto_blocks_exact_ip)}`);
+  if (data?.v7_local_request_security_raw_query_stored !== false) failures.push(`local_request_security_raw_query=${JSON.stringify(data?.v7_local_request_security_raw_query_stored)}`);
+  if (data?.v7_local_request_security_training_eligible !== false) failures.push(`local_request_security_training=${JSON.stringify(data?.v7_local_request_security_training_eligible)}`);
+
   return failures;
 }
 
@@ -85,6 +93,13 @@ for (let attempt = 1; attempt <= attempts; attempt += 1) {
         v7_local_static_bot_intel_mode: data.v7_local_static_bot_intel_mode,
         v7_local_static_bot_intel_total_markers: data.v7_local_static_bot_intel_total_markers,
         v7_local_static_bot_intel_runtime_external_dependency: data.v7_local_static_bot_intel_runtime_external_dependency,
+        v7_local_request_security_enabled: data.v7_local_request_security_enabled,
+        v7_local_request_security_implementation: data.v7_local_request_security_implementation,
+        v7_local_request_security_rule_categories: data.v7_local_request_security_rule_categories,
+        v7_local_request_security_runtime_external_dependency: data.v7_local_request_security_runtime_external_dependency,
+        v7_local_request_security_auto_blocks_exact_ip: data.v7_local_request_security_auto_blocks_exact_ip,
+        v7_local_request_security_raw_query_stored: data.v7_local_request_security_raw_query_stored,
+        v7_local_request_security_training_eligible: data.v7_local_request_security_training_eligible,
       }, null, 2));
       process.exit(0);
     }

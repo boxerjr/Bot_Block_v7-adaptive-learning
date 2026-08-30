@@ -37,6 +37,12 @@ test("baseline and extended secret paths are deterministic honeypots", () => {
     "/manager/html",
     "/actuator/env",
     "/swagger-ui.html",
+    "/appsettings.json",
+    "/docker-compose.yml",
+    "/.npmrc",
+    "/_debugbar/open",
+    "/backup-2026.sql",
+    "/credentials.prod.pem",
   ]) {
     const result = classifyHoneypotPath(path);
     assert.equal(result.matched, true, path);
@@ -50,6 +56,8 @@ test("normal public and V7 operational paths are not honeypots", () => {
     "/favicon.ico",
     "/robots.txt",
     "/assets/app.js",
+    "/downloads/manual.pdf",
+    "/photos/backup.jpg",
     "/contact",
     "/_health",
     "/_telegram/webhook",
@@ -77,7 +85,7 @@ test("global honeypot wrapper blocks exact IP before downstream policy and prese
   assert.ok(downstreamIndex > honeyIndex);
   assert.match(entry, /setManualIpBlocked\(env\.DB, ipKey, null\)/);
   assert.match(entry, /BLOCK_BY_HONEYPOT/);
-  assert.match(entry, /AI: skipped — hostile path is deterministic/);
+  assert.match(entry, /AI: skipped — hostile request target is deterministic/);
   assert.match(entry, /pathname\.startsWith\("\/_telegram\/"\)/);
   assert.match(entry, /pathname\.startsWith\("\/_shadow\/"\)/);
 });

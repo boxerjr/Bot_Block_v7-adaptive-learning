@@ -27,6 +27,8 @@ const EXTRA_EXACT = new Map([
   ["/id_rsa", "ssh_private_key_probe"],
   ["/id_ed25519", "ssh_private_key_probe"],
   ["/authorized_keys", "ssh_keys_probe"],
+  ["/id_dsa", "ssh_private_key_probe"],
+  ["/id_ecdsa", "ssh_private_key_probe"],
   ["/proc/self/environ", "process_environment_probe"],
   ["/etc/passwd", "passwd_probe"],
   ["/jenkins", "jenkins_probe"],
@@ -58,6 +60,26 @@ const EXTRA_EXACT = new Map([
   ["/telescope", "laravel_telescope_probe"],
   ["/boaform/admin/formlogin", "router_admin_probe"],
   ["/hnap1", "router_hnap_probe"],
+  ["/appsettings.json", "aspnet_settings_probe"],
+  ["/appsettings.production.json", "aspnet_settings_probe"],
+  ["/auth.json", "authentication_config_probe"],
+  ["/docker-compose.yml", "container_manifest_probe"],
+  ["/docker-compose.yaml", "container_manifest_probe"],
+  ["/dockerfile", "container_manifest_probe"],
+  ["/env.js", "environment_config_probe"],
+  ["/key.json", "key_manifest_probe"],
+  ["/keys.json", "key_manifest_probe"],
+  ["/php.ini", "php_configuration_probe"],
+  ["/server.key", "server_private_key_probe"],
+  ["/wlwmanifest.xml", "wordpress_manifest_probe"],
+  ["/.git-credentials", "git_credentials_probe"],
+  ["/.htpasswd", "password_file_probe"],
+  ["/.netrc", "network_credentials_probe"],
+  ["/.npmrc", "package_registry_credentials_probe"],
+  ["/.pypirc", "package_registry_credentials_probe"],
+  ["/_all_dbs", "database_inventory_probe"],
+  ["/login.action", "java_action_probe"],
+  ["/user.action", "java_action_probe"],
 ]);
 
 const EXTRA_PREFIX = [
@@ -79,7 +101,14 @@ const EXTRA_PREFIX = [
   ["/vendor/phpunit", "phpunit_probe"],
   ["/storage/logs", "application_log_probe"],
   ["/cgi-bin", "cgi_probe"],
+  ["/.idea", "ide_metadata_probe"],
+  ["/.vscode", "ide_metadata_probe"],
+  ["/_debugbar", "framework_debugbar_probe"],
+  ["/dbadmin", "database_admin_probe"],
+  ["/webdav", "webdav_probe"],
 ];
+
+const SENSITIVE_ARCHIVE_RE = /(?:^|\/)(?:backup|config|credentials|database|db|dump|secrets|site|source|src|www)(?:[._-][a-z0-9_-]+)?\.(?:7z|bak|bz2|gz|key|log|old|orig|pem|rar|sql|swp|tar|tgz|xz|zip)$/i;
 
 function boolEnv(value, fallback = true) {
   if (value == null || value === "") return fallback;
@@ -137,6 +166,16 @@ export function classifyHoneypotPath(pathValue = "/") {
     };
   }
 
+  if (SENSITIVE_ARCHIVE_RE.test(path)) {
+    return {
+      matched: true,
+      path,
+      source: "v7_extended",
+      rule: "sensitive_archive_probe",
+      matchedPath: "sensitive_name_plus_archive_extension",
+    };
+  }
+
   for (const baseline of HONEYPOTS) {
     const normalized = normalizeHoneypotPath(baseline);
     if (prefixMatch(path, normalized)) {
@@ -188,6 +227,8 @@ export function honeypotRuleStats() {
     extendedExact: EXTRA_EXACT.size,
     extendedPrefix: EXTRA_PREFIX.length,
     envVariantRule: 1,
-    totalRuleEntries: HONEYPOTS.length + EXTRA_EXACT.size + EXTRA_PREFIX.length + 1,
+    sensitiveArchiveRule: 1,
+    totalRuleEntries:
+      HONEYPOTS.length + EXTRA_EXACT.size + EXTRA_PREFIX.length + 2,
   };
 }

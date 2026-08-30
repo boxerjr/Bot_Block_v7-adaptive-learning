@@ -9,6 +9,7 @@
     "MOBILE_ONLY": "true",
     "HUMANS_ONLY": "true",
     "LOCAL_STATIC_BOT_INTEL_ENABLED": "true",
+    "LOCAL_REQUEST_SECURITY_ENABLED": "true",
     "AI_ENABLED": "true",
     "AI_MODE": "all",
     "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
