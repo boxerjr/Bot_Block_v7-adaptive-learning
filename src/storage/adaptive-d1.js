@@ -199,6 +199,7 @@ export async function getAdaptiveEventContext(db, eventId) {
          e.event_id,
          e.asn,
          e.final_decision,
+         e.observed_at,
          e.telemetry_summary_json,
          a.scope AS adaptive_scope,
          a.fingerprint_id
@@ -224,6 +225,7 @@ export async function getAdaptiveEventContext(db, eventId) {
     eventId: row.event_id,
     asn: row.asn || null,
     v63Decision: row.final_decision || "unknown",
+    observedAt: row.observed_at || null,
     fingerprintId: row.fingerprint_id || null,
     scope: row.adaptive_scope || declaredScope || (datasetEligible ? "live" : "test"),
     datasetEligible,

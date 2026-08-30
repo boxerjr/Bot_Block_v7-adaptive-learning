@@ -48,6 +48,10 @@ function safeEqual(a, b) {
   return diff === 0;
 }
 
+function normalizedTelegramChatId(value) {
+  return String(value ?? "").trim();
+}
+
 function validIpKey(ipKey) {
   return /^m22ip_[A-Za-z0-9_-]{32}$/.test(String(ipKey || ""));
 }
@@ -404,7 +408,7 @@ async function answerCallback(env, callbackId, text, showAlert = false) {
 async function removeCallbackKeyboard(env, cb) {
   if (!cb?.message?.message_id) return;
   await telegramApi(env, "editMessageReplyMarkup", {
-    chat_id: String(env.TELEGRAM_CHAT_ID),
+    chat_id: normalizedTelegramChatId(env.TELEGRAM_CHAT_ID),
     message_id: cb.message.message_id,
     reply_markup: { inline_keyboard: [] },
   });
@@ -440,7 +444,7 @@ async function handleOwnerLearningAction(env, cb, parsed, eventId, ipKey) {
       true
     );
     await telegramApi(env, "sendMessage", {
-      chat_id: String(env.TELEGRAM_CHAT_ID),
+      chat_id: normalizedTelegramChatId(env.TELEGRAM_CHAT_ID),
       text: alreadyConfirmed
         ? "✅ HUMAN ALREADY CONFIRMED\nOperatorLearning: human_confirmed\nRaw IP stored: false"
         : `✅ HUMAN CONFIRMED\nOperatorLearning: human_confirmed\nTrainingEligible: ${learning.trainingEligible === true}\nRaw IP stored: false`,
@@ -468,7 +472,7 @@ async function handleOwnerLearningAction(env, cb, parsed, eventId, ipKey) {
     true
   );
   await telegramApi(env, "sendMessage", {
-    chat_id: String(env.TELEGRAM_CHAT_ID),
+    chat_id: normalizedTelegramChatId(env.TELEGRAM_CHAT_ID),
     text: `✅ NOT ME CONFIRMED\nIP: BLOCKED (exact IP only)\nOperatorLearning: ${learned ? "false_negative" : learning.reason || "not-written"}\nRaw IP stored: false`,
     disable_web_page_preview: true,
   });
@@ -504,7 +508,7 @@ export async function handleTelegramCallbackWebhook(request, env) {
   }
 
   const expectedSecret = await webhookSecret(env.CHALLENGE_SECRET);
-  const suppliedSecret = request.headers.get("x-telegram-bot-api-secret-token") || "";
+  const suppliedSecret = (request.headers.get("x-telegram-bot-api-secret-token") || "").trim();
   if (!safeEqual(suppliedSecret, expectedSecret)) {
     return new Response("Unauthorized", { status: 401 });
   }
@@ -514,8 +518,8 @@ export async function handleTelegramCallbackWebhook(request, env) {
   const cb = update?.callback_query;
   if (!cb) return new Response("OK", { status: 200 });
 
-  const chatId = String(cb?.message?.chat?.id ?? "");
-  if (chatId !== String(env.TELEGRAM_CHAT_ID)) {
+  const chatId = normalizedTelegramChatId(cb?.message?.chat?.id);
+  if (chatId !== normalizedTelegramChatId(env.TELEGRAM_CHAT_ID)) {
     await answerCallback(env, cb.id, "Unauthorized chat");
     return new Response("OK", { status: 200 });
   }
@@ -575,7 +579,7 @@ export async function handleTelegramCallbackWebhook(request, env) {
   );
 
   await telegramApi(env, "sendMessage", {
-    chat_id: String(env.TELEGRAM_CHAT_ID),
+    chat_id: normalizedTelegramChatId(env.TELEGRAM_CHAT_ID),
     text: confirmation,
     disable_web_page_preview: true,
   });

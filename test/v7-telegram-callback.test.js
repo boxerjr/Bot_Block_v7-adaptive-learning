@@ -204,3 +204,9 @@ test("operational worker exposes Telegram webhook and no-browser callback flags"
   assert.match(operational, /manual_ip_callback_opens_browser: false/);
   assert.match(operational, /m22_telegram_callback_opens_browser: false/);
 });
+
+test("Telegram callback identity tolerates harmless whitespace around configured chat ID", () => {
+  assert.match(callbackSource, /normalizedTelegramChatId/);
+  assert.match(callbackSource, /String\(value \?\? ""\)\.trim\(\)/);
+  assert.match(callbackSource, /suppliedSecret = .*\.trim\(\)/);
+});
