@@ -26,6 +26,10 @@ const globalWrapper = readFileSync(
   new URL("../src/v7-global-honeypot-entry.js", import.meta.url),
   "utf8"
 );
+const releaseWrapper = readFileSync(
+  new URL("../src/v7-release-hardening-entry.js", import.meta.url),
+  "utf8"
+);
 const deepHelper = readFileSync(
   new URL("../src/adaptive/monitor-deep-inspection.js", import.meta.url),
   "utf8"
@@ -80,7 +84,7 @@ test("country policy precedes mobile-only and monitor AI", () => {
   assert.match(policyWrapper, /m22_policy_enforcement_order/);
 });
 
-test("public check has exact-IP privacy-preserving limiter with automatic block", () => {
+test("public check has exact-IP privacy-preserving atomic limiter with automatic block", () => {
   assert.match(operational, /checkMonitorRateLimit/);
   assert.match(operational, /AUTO_BLOCK_RATE_LIMIT/);
   assert.match(operational, /m22_rate_limit_per_minute_per_exact_ip/);
@@ -90,8 +94,8 @@ test("public check has exact-IP privacy-preserving limiter with automatic block"
   assert.match(rateLimit, /deriveManualIpKey/);
   assert.match(rateLimit, /setManualIpBlocked/);
   assert.match(rateLimit, /exactIp: true/);
-  assert.match(rateLimit, /autoBlockEnabled: true/);
-  assert.match(rateLimit, /m22rl_/);
+  assert.match(rateLimit, /atomicCounter: true/);
+  assert.match(rateLimit, /m22rlc_/);
   assert.doesNotMatch(rateLimit, /networkBucket/);
   assert.doesNotMatch(rateLimit, /INSERT[^;]*raw_ip/i);
   assert.doesNotMatch(operational, /Too Many Monitor Requests/);
@@ -112,14 +116,16 @@ test("deep monitor stays excluded from training while production wrapper owns re
   assert.match(production, /v7_redirect_enforcing/);
 });
 
-test("wrangler routes through global honeypot, timeout wrapper, then V7 redirect entry, with 3 per minute", () => {
-  assert.match(wrangler, /"main": "src\/v7-global-honeypot-entry\.js"/);
+test("wrangler routes through release hardening, global honeypot, timeout, then V7 redirect entry", () => {
+  assert.match(wrangler, /"main"\s*:\s*"src\/v7-release-hardening-entry\.js"/);
+  assert.match(releaseWrapper, /import worker from "\.\/v7-global-honeypot-entry\.js"/);
+  assert.match(releaseWrapper, /return worker\.fetch\(request, env, ctx\)/);
   assert.match(globalWrapper, /import worker from "\.\/v7-owner-timeout-entry\.js"/);
   assert.match(globalWrapper, /return worker\.fetch\(request, env, ctx\)/);
   assert.match(timeoutWrapper, /import productionWorker from "\.\/v7-production-entry\.js"/);
   assert.match(timeoutWrapper, /productionWorker\.fetch\(request, env, ctx\)/);
-  assert.match(wrangler, /"ALLOWED_COUNTRIES": "ES"/);
-  assert.match(wrangler, /"MOBILE_ONLY": "true"/);
-  assert.match(wrangler, /"REDIRECT_ENFORCING": "true"/);
-  assert.match(wrangler, /"RATE_LIMIT_PER_MIN": "3"/);
+  assert.match(wrangler, /"ALLOWED_COUNTRIES"\s*:\s*"ES"/);
+  assert.match(wrangler, /"MOBILE_ONLY"\s*:\s*"true"/);
+  assert.match(wrangler, /"REDIRECT_ENFORCING"\s*:\s*"true"/);
+  assert.match(wrangler, /"RATE_LIMIT_PER_MIN"\s*:\s*"3"/);
 });
