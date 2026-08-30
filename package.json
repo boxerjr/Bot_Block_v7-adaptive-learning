@@ -6,12 +6,11 @@
   "description": "Adaptive AI anti-bot and traffic policy system for Cloudflare Workers",
   "scripts": {
     "test": "node --test",
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "d1:migrate:local": "wrangler d1 migrations apply DB --local",
-    "d1:migrate:remote": "wrangler d1 migrations apply DB --remote"
-  },
-  "devDependencies": {
-    "wrangler": "^4.0.0"
+    "test:migrations": "npx --yes wrangler@4.127.1 d1 migrations apply DB --local --persist-to=.wrangler/ci",
+    "verify": "npm test && npm run test:migrations",
+    "dev": "npx --yes wrangler@4.127.1 dev",
+    "deploy": "npm run verify && npm run d1:migrate:remote && npx --yes wrangler@4.127.1 deploy",
+    "d1:migrate:local": "npx --yes wrangler@4.127.1 d1 migrations apply DB --local",
+    "d1:migrate:remote": "npx --yes wrangler@4.127.1 d1 migrations apply DB --remote"
   }
 }
