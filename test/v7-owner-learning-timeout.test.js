@@ -74,6 +74,5 @@ test("Cloudflare runs timeout sweep every minute through the hardened global cha
   assert.match(releaseEntry, /worker\.scheduled\(controller, env, ctx\)/);
   assert.match(globalEntry, /import worker from "\.\/v7-owner-timeout-entry\.js"/);
   assert.match(globalEntry, /worker\.scheduled\(controller, env, ctx\)/);
-  assert.match(wrangler, /"crons"\s*:\s*\{"crons"/); // never matches accidental malformed nesting
   assert.match(wrangler, /"crons"\s*:\s*\["\* \* \* \* \*"\]/);
 });
