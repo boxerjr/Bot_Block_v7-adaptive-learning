@@ -62,6 +62,7 @@ For Spain-only mobile traffic, the defaults are already:
 ALLOWED_COUNTRIES=ES
 MOBILE_ONLY=true
 HUMANS_ONLY=true
+LOCAL_STATIC_BOT_INTEL_ENABLED=true
 RATE_LIMIT_PER_MIN=3
 REDIRECT_ENFORCING=true
 HONEYPOT_ENFORCING=true
@@ -150,6 +151,8 @@ Important checks include:
 ```text
 v7_redirect_requested: true
 v7_honeypot_enforcing: true
+v7_local_static_bot_intel_enabled: true
+v7_local_static_bot_intel_runtime_external_dependency: false
 v7_community_intel_upstream_enabled: true
 v7_community_intel_hard_block_enabled: true
 m22_asn_hard_block_enforcing: true
@@ -177,6 +180,10 @@ Normal browser support paths such as these are not honeypots:
 A controlled request to a honeypot such as `/.env` should be treated as hostile, skip AI, block the exact IP, and use `BLOCK_URL` when configured. Do this only from a test IP you can later unblock.
 
 A known hosting/VPN organization should be blocked by the infrastructure policy before country/browser AI.
+
+A request declaring a precise scanner or crawler User-Agent such as `sqlmap`,
+`GPTBot` or `ClaudeBot` should be rejected locally before AI. The signatures
+are part of the deployed Worker and require no external blocker or feed.
 
 ## 11. Optional: publish sanitized Community Intelligence to GitHub
 
