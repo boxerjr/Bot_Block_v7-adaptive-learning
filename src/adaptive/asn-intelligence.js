@@ -4,6 +4,18 @@ const SPAMHAUS_ASN_DROP_URL = "https://www.spamhaus.org/drop/asndrop.json";
 const DEFAULT_REFRESH_MS = 24 * 60 * 60 * 1000;
 const FEED_TTL_MS = 48 * 60 * 60 * 1000;
 
+// These organization rules are useful for blocking the current strict-policy
+// request, but are too generic to permanently poison an entire ASN. Persistent
+// org_auto_hard promotion requires a provider-/infrastructure-specific rule.
+const NON_PERSISTENT_ORG_RULES = new Set([
+  "consumer_vpn",
+  "vpn_keyword",
+  "proxy_keyword",
+  "residential_proxy",
+  "anonymizer_keyword",
+  "privacy_network",
+]);
+
 function boolEnv(value, fallback = false) {
   if (value == null || value === "") return fallback;
   return String(value).trim().toLowerCase() === "true";
@@ -14,6 +26,17 @@ function normalizeAsn(value) {
   if (/^AS\d+$/.test(raw)) return raw;
   if (/^\d+$/.test(raw)) return `AS${raw}`;
   return null;
+}
+
+export function organizationRuleEligibleForHardPromotion(
+  organizationClass,
+  organizationRule
+) {
+  const cls = String(organizationClass || "");
+  const rule = String(organizationRule || "").trim();
+  if (!["hosting_cloud", "vpn_proxy"].includes(cls)) return false;
+  if (!rule || rule === "none" || rule === "unknown") return false;
+  return !NON_PERSISTENT_ORG_RULES.has(rule);
 }
 
 async function ensureSchema(db) {
@@ -110,6 +133,13 @@ export async function promoteAsnToHardFromOrganization(
   if (!asn) return { promoted: false, reason: "asn_unavailable" };
   if (!["hosting_cloud", "vpn_proxy"].includes(String(organizationClass || ""))) {
     return { promoted: false, reason: "organization_not_hard_class" };
+  }
+  if (!organizationRuleEligibleForHardPromotion(organizationClass, organizationRule)) {
+    return {
+      promoted: false,
+      asn,
+      reason: "generic_organization_rule_not_persisted",
+    };
   }
   if (!(await ensureSchema(env.DB))) return { promoted: false, reason: "schema_unavailable" };
 
