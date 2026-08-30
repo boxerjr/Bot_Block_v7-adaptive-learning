@@ -21,6 +21,14 @@ import {
   honeypotEnforcingEnabled,
   honeypotRuleStats,
 } from "./adaptive/honeypot-intelligence.js";
+import { checkMonitorRateLimit } from "./adaptive/monitor-rate-limit.js";
+import {
+  buildCommunityIntelligenceExport,
+  classifyCommunityAsn,
+  communityExportEnabled,
+  getCommunityIntelligenceHealth,
+  refreshCommunityIntelligence,
+} from "./adaptive/community-intelligence.js";
 
 function waitUntil(ctx, promise) {
   if (ctx?.waitUntil) ctx.waitUntil(promise);
@@ -54,6 +62,10 @@ function isInternalPath(pathname = "/") {
   );
 }
 
+function rateLimitPerMinute(env) {
+  return Math.max(1, Math.min(120, Number(env.RATE_LIMIT_PER_MIN || 3) || 3));
+}
+
 async function globalExactIpBlock(request, env) {
   if (!env?.DB || !env?.CHALLENGE_SECRET) return null;
   try {
@@ -76,8 +88,6 @@ async function buildBlockedKeyboard(request, env, ipKey) {
   }
 
   try {
-    // Keep direct HMAC exact-IP controls browser-independent, consistent with
-    // the existing operational Telegram controls.
     await ensureTelegramWebhook(env, request.url);
     return await buildTelegramIpKeyCallbackKeyboard(
       env.CHALLENGE_SECRET,
@@ -111,12 +121,29 @@ function honeypotMessage({ network, match, orgIntel, promotion }) {
   lines.push(
     "Decision: block",
     "ExactIP: auto-blocked",
-    "PolicyOrder: exact-IP → honeypot → ASN/Org → country → device → AI",
+    "PolicyOrder: exact-IP → honeypot → community ASN → ASN/Org → country → device → AI",
     "AI: skipped — hostile path is deterministic",
     "DatasetEligible: false",
     "RawIP/UA stored: false"
   );
   return lines.join("\n");
+}
+
+function communityAsnMessage(network, intel) {
+  return [
+    "🌐 BLOCK_BY_COMMUNITY_ASN",
+    `ASN: ${clean(network.asn || "?")}`,
+    `Org: ${clean(network.org || "?")}`,
+    `Country: ${clean(network.country || "?")}`,
+    `Tier: ${clean(intel.tier || "hard")}`,
+    `Source: ${clean(intel.source || "community_repo")}`,
+    `Reason: ${clean(intel.reason || "community_hosting_or_vpn")}`,
+    `Confidence: ${Number(intel.confidence || 0)}`,
+    "Policy: shared HARD contains deterministic hosting/VPN/proxy infrastructure only",
+    "Decision: block",
+    "AI: skipped",
+    "RawIP/UA stored: false",
+  ].join("\n");
 }
 
 async function handleHoneypot(request, env, ctx, match) {
@@ -146,16 +173,12 @@ async function handleHoneypot(request, env, ctx, match) {
       if (ipKey) {
         alreadyBlocked = await isManualIpBlocked(env.DB, ipKey);
         if (!alreadyBlocked) {
-          // eventId is intentionally null: this is deterministic path evidence,
-          // not a browser event and therefore must not invent a training label.
           await setManualIpBlocked(env.DB, ipKey, null);
         }
       }
     } catch {}
   }
 
-  // Only announce the first honeypot hit for an exact IP. Once persisted as
-  // blocked, later external requests are rejected by globalExactIpBlock.
   if (!alreadyBlocked) {
     const keyboard = await buildBlockedKeyboard(request, env, ipKey);
     waitUntil(
@@ -171,6 +194,39 @@ async function handleHoneypot(request, env, ctx, match) {
   return redirectResponse(request, env, "block") || blockFallbackResponse();
 }
 
+async function handleCommunityHardAsn(request, env, ctx, network, intel) {
+  try {
+    const limiter = await checkMonitorRateLimit({
+      db: env.DB,
+      secret: env.CHALLENGE_SECRET,
+      ip: clientIp(request),
+      limit: rateLimitPerMinute(env),
+    });
+    if (limiter.allowed) {
+      waitUntil(ctx, sendTelegramWithKeyboard(env, communityAsnMessage(network, intel), null));
+    }
+  } catch {}
+  return redirectResponse(request, env, "block") || blockFallbackResponse();
+}
+
+async function communityExport(env) {
+  if (!communityExportEnabled(env)) return blockFallbackResponse();
+  const feed = await buildCommunityIntelligenceExport(env);
+  if (!feed?.ready) {
+    return Response.json(
+      { schema_version: 1, ready: false, reason: feed?.reason || "unavailable" },
+      { status: 503, headers: { "cache-control": "no-store" } }
+    );
+  }
+  return Response.json(feed, {
+    headers: {
+      "cache-control": "public, max-age=300",
+      "access-control-allow-origin": "*",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
 async function health(request, env, ctx) {
   const response = await worker.fetch(request, env, ctx);
   let data;
@@ -181,6 +237,7 @@ async function health(request, env, ctx) {
   }
 
   const stats = honeypotRuleStats();
+  const community = await getCommunityIntelligenceHealth(env);
   return Response.json(
     {
       ...data,
@@ -195,6 +252,14 @@ async function health(request, env, ctx) {
       v7_honeypot_total_rule_entries: stats.totalRuleEntries,
       v7_honeypot_raw_ip_stored: false,
       v7_honeypot_training_eligible: false,
+      v7_community_intel_export_enabled: community.exportEnabled,
+      v7_community_intel_upstream_enabled: community.upstreamEnabled,
+      v7_community_intel_hard_block_enabled: community.hardBlockEnabled,
+      v7_community_intel_hard_count: community.hardCount,
+      v7_community_intel_risk_count: community.riskCount,
+      v7_community_intel_last_success_ms: community.lastSuccessMs,
+      v7_community_intel_raw_ip_stored: false,
+      v7_community_intel_external_feed_redistribution: false,
     },
     { status: response.status, headers: { "cache-control": "no-store" } }
   );
@@ -208,8 +273,10 @@ export default {
       return health(request, env, ctx);
     }
 
-    // Never let operational callback/probe endpoints be swallowed by the
-    // global exact-IP/honeypot gate.
+    if (url.pathname === "/_community/intelligence.json" && request.method === "GET") {
+      return communityExport(env);
+    }
+
     if (isInternalPath(url.pathname)) {
       return worker.fetch(request, env, ctx);
     }
@@ -224,12 +291,22 @@ export default {
       }
     }
 
+    const network = networkInfo(request);
+    const communityIntel = await classifyCommunityAsn(env, network.asn);
+    if (communityIntel?.hardBlock) {
+      return handleCommunityHardAsn(request, env, ctx, network, communityIntel);
+    }
+
     return worker.fetch(request, env, ctx);
   },
 
   async scheduled(controller, env, ctx) {
+    const tasks = [refreshCommunityIntelligence(env, Date.now())];
     if (typeof worker.scheduled === "function") {
-      return worker.scheduled(controller, env, ctx);
+      tasks.push(worker.scheduled(controller, env, ctx));
     }
+    const all = Promise.allSettled(tasks);
+    if (ctx?.waitUntil) ctx.waitUntil(all);
+    else await all;
   },
 };
