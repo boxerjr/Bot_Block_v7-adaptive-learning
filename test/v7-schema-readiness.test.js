@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getReleaseSchemaHealth } from "../src/storage/schema-readiness.js";
+import {
+  ensureReleaseAdditiveSchema,
+  getReleaseSchemaHealth,
+} from "../src/storage/schema-readiness.js";
 
 const tables = [
   "installations",
@@ -68,4 +71,38 @@ test("missing ASN/community tables expose the exact unapplied migrations", async
     "0006_asn_intelligence.sql",
     "0007_community_intelligence.sql",
   ]);
+});
+
+test("runtime bootstrap creates only additive intelligence schema 0006 and 0007", async () => {
+  let executed = "";
+  const db = {
+    async exec(sql) {
+      executed = String(sql);
+    },
+  };
+
+  const result = await ensureReleaseAdditiveSchema(db);
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.bootstrappedMigrations, [
+    "0006_asn_intelligence.sql",
+    "0007_community_intelligence.sql",
+  ]);
+
+  assert.match(executed, /CREATE TABLE IF NOT EXISTS asn_intelligence/);
+  assert.match(executed, /CREATE TABLE IF NOT EXISTS community_asn_intelligence/);
+  assert.doesNotMatch(executed, /CREATE TABLE IF NOT EXISTS events/);
+  assert.doesNotMatch(executed, /CREATE TABLE IF NOT EXISTS adaptive_live_capture_sessions/);
+});
+
+test("additive bootstrap reports D1 failure instead of claiming readiness", async () => {
+  const db = {
+    async exec() {
+      throw new Error("D1 unavailable");
+    },
+  };
+
+  const result = await ensureReleaseAdditiveSchema(db);
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, "additive_schema_bootstrap_failed");
+  assert.match(result.error, /D1 unavailable/);
 });

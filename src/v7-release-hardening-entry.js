@@ -6,9 +6,13 @@ import {
   monitorTokenMatchesIpKey,
   verifyMonitorToken,
 } from "./adaptive/monitor-token.js";
-import { getReleaseSchemaHealth } from "./storage/schema-readiness.js";
+import {
+  ensureReleaseAdditiveSchema,
+  getReleaseSchemaHealth,
+} from "./storage/schema-readiness.js";
 
 const MAX_MONITOR_BODY_BYTES = 120_000;
+const additiveSchemaPromises = new WeakMap();
 
 function isMonitorPage(request) {
   if (request.method !== "GET") return false;
@@ -28,6 +32,30 @@ function noStoreJson(body, status) {
       "x-robots-tag": "noindex, nofollow",
     },
   });
+}
+
+async function ensureAdditiveSchemaOnce(db) {
+  if (!db || (typeof db !== "object" && typeof db !== "function")) {
+    return { ready: false, reason: "db_unavailable", bootstrappedMigrations: [] };
+  }
+
+  let pending = additiveSchemaPromises.get(db);
+  if (!pending) {
+    pending = ensureReleaseAdditiveSchema(db).then((result) => {
+      if (!result?.ready) additiveSchemaPromises.delete(db);
+      return result;
+    }, (error) => {
+      additiveSchemaPromises.delete(db);
+      return {
+        ready: false,
+        reason: "additive_schema_bootstrap_failed",
+        error: String(error?.message || error).slice(0, 160),
+        bootstrappedMigrations: [],
+      };
+    });
+    additiveSchemaPromises.set(db, pending);
+  }
+  return pending;
 }
 
 async function exactIpKey(request, env) {
@@ -154,7 +182,7 @@ async function verifyBoundMonitorSubmit(request, env) {
   return null;
 }
 
-async function hardeningHealth(request, env, ctx) {
+async function hardeningHealth(request, env, ctx, bootstrap) {
   const response = await worker.fetch(request, env, ctx);
   let data;
   try {
@@ -176,6 +204,9 @@ async function hardeningHealth(request, env, ctx) {
       v7_schema_missing_triggers: schema.missingTriggers,
       v7_schema_missing_migrations: schema.missingMigrations,
       v7_schema_required_migration_count: schema.requiredMigrationCount || 7,
+      v7_schema_additive_bootstrap_ready: bootstrap?.ready === true,
+      v7_schema_additive_bootstrap_reason: bootstrap?.reason || "unknown",
+      v7_schema_additive_bootstrap_migrations: bootstrap?.bootstrappedMigrations || [],
       v7_monitor_token_exact_ip_bound: true,
       v7_monitor_token_transfer_rejected: true,
       v7_enforcement_ip_source: "cf-connecting-ip_only",
@@ -188,10 +219,14 @@ async function hardeningHealth(request, env, ctx) {
 
 export default {
   async fetch(request, env, ctx) {
+    // Migrations 0006/0007 are additive cache/intelligence schema. Bootstrap
+    // them once per Worker isolate before they can be queried. Foundational
+    // schema 0001-0005 is intentionally never auto-created here.
+    const bootstrap = await ensureAdditiveSchemaOnce(env?.DB);
     const pathname = new URL(request.url).pathname;
 
     if (pathname === "/_health") {
-      return hardeningHealth(request, env, ctx);
+      return hardeningHealth(request, env, ctx, bootstrap);
     }
 
     if (isMonitorSubmit(request)) {
@@ -208,6 +243,7 @@ export default {
   },
 
   async scheduled(controller, env, ctx) {
+    await ensureAdditiveSchemaOnce(env?.DB);
     if (typeof worker.scheduled === "function") {
       return worker.scheduled(controller, env, ctx);
     }
