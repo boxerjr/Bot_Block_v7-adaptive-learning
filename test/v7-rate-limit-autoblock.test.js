@@ -10,6 +10,11 @@ import {
   isManualIpBlocked,
 } from "../src/adaptive/manual-ip-block.js";
 
+function globPrefix(pattern) {
+  const value = String(pattern || "");
+  return value.endsWith("*") ? value.slice(0, -1) : value;
+}
+
 function fakeDb() {
   const rows = new Map();
 
@@ -21,15 +26,31 @@ function fakeDb() {
         bind(...args) {
           return {
             async first() {
-              if (statement.includes("COUNT(*) AS n")) {
-                const pattern = String(args[0] || "");
-                const prefix = pattern.endsWith("*") ? pattern.slice(0, -1) : pattern;
-                const cutoff = Number(args[1] || 0);
-                let n = 0;
-                for (const row of rows.values()) {
-                  if (row.sid.startsWith(prefix) && row.issued_at_ms >= cutoff) n++;
+              if (statement.includes("ON CONFLICT(sid) DO UPDATE") && statement.includes("RETURNING consumed_at_ms AS n")) {
+                const [sidRaw, nowRaw, expiresRaw] = args;
+                const sid = String(sidRaw);
+                const now = Number(nowRaw);
+                const expires = Number(expiresRaw);
+                const existing = rows.get(sid);
+
+                if (!existing || Number(existing.expires_at_ms) <= now) {
+                  const row = {
+                    sid,
+                    issued_at_ms: now,
+                    expires_at_ms: expires,
+                    consumed_at_ms: 1,
+                  };
+                  rows.set(sid, row);
+                  return { n: 1, issued_at_ms: now, expires_at_ms: expires };
                 }
-                return { n };
+
+                existing.consumed_at_ms = Number(existing.consumed_at_ms || 0) + 1;
+                rows.set(sid, existing);
+                return {
+                  n: existing.consumed_at_ms,
+                  issued_at_ms: existing.issued_at_ms,
+                  expires_at_ms: existing.expires_at_ms,
+                };
               }
 
               if (statement.includes("WHERE sid = ?") && statement.includes("expires_at_ms > ?")) {
@@ -43,8 +64,7 @@ function fakeDb() {
             },
 
             async run() {
-              if (statement.includes("INSERT INTO adaptive_live_capture_sessions") ||
-                  statement.includes("INSERT OR REPLACE INTO adaptive_live_capture_sessions")) {
+              if (statement.includes("INSERT OR REPLACE INTO adaptive_live_capture_sessions")) {
                 const [sid, issuedAt, expiresAt, consumedAt] = args;
                 rows.set(String(sid), {
                   sid: String(sid),
@@ -55,24 +75,24 @@ function fakeDb() {
                 return { success: true };
               }
 
+              if (statement.includes("DELETE FROM adaptive_live_capture_sessions") && statement.includes("sid = ? OR sid GLOB ?")) {
+                const exact = String(args[0] || "");
+                const prefix = globPrefix(args[1]);
+                for (const sid of [...rows.keys()]) {
+                  if (sid === exact || sid.startsWith(prefix)) rows.delete(sid);
+                }
+                return { success: true };
+              }
+
               if (statement.includes("DELETE FROM adaptive_live_capture_sessions") && statement.includes("WHERE sid = ?")) {
                 rows.delete(String(args[0] || ""));
                 return { success: true };
               }
 
-              if (statement.includes("DELETE FROM adaptive_live_capture_sessions") && statement.includes("WHERE sid GLOB ?")) {
-                const pattern = String(args[0] || "");
-                const prefix = pattern.endsWith("*") ? pattern.slice(0, -1) : pattern;
-                for (const sid of [...rows.keys()]) {
-                  if (sid.startsWith(prefix)) rows.delete(sid);
-                }
-                return { success: true };
-              }
-
-              if (statement.includes("DELETE FROM adaptive_live_capture_sessions") && statement.includes("expires_at_ms < ?")) {
-                const now = Number(args[0] || 0);
+              if (statement.includes("sid GLOB 'm22rlc_*'") && statement.includes("expires_at_ms < ?")) {
+                const cutoff = Number(args[0] || 0);
                 for (const [sid, row] of rows.entries()) {
-                  if (sid.startsWith("m22rl_") && row.expires_at_ms < now) rows.delete(sid);
+                  if (sid.startsWith("m22rlc_") && row.expires_at_ms < cutoff) rows.delete(sid);
                 }
                 return { success: true };
               }
@@ -86,7 +106,7 @@ function fakeDb() {
   };
 }
 
-test("first three requests pass and fourth auto-blocks only the exact IP", async () => {
+test("first three requests pass and fourth atomically auto-blocks only the exact IP", async () => {
   const db = fakeDb();
   const secret = "rate-limit-test-secret";
   const ip = "203.0.113.10";
@@ -94,54 +114,22 @@ test("first three requests pass and fourth auto-blocks only the exact IP", async
   const base = 1_800_000_000_000;
 
   for (let i = 0; i < 3; i++) {
-    const result = await checkMonitorRateLimit({
-      db,
-      secret,
-      ip,
-      limit: 3,
-      windowMs: 60_000,
-      nowMs: base + i,
-    });
+    const result = await checkMonitorRateLimit({ db, secret, ip, limit: 3, windowMs: 60_000, nowMs: base + i });
     assert.equal(result.allowed, true);
     assert.equal(result.count, i + 1);
-    assert.equal(result.exactIp, true);
-    assert.equal(result.autoBlocked, false);
+    assert.equal(result.atomicCounter, true);
   }
 
-  const fourth = await checkMonitorRateLimit({
-    db,
-    secret,
-    ip,
-    limit: 3,
-    windowMs: 60_000,
-    nowMs: base + 3,
-  });
+  const fourth = await checkMonitorRateLimit({ db, secret, ip, limit: 3, windowMs: 60_000, nowMs: base + 3 });
   assert.equal(fourth.allowed, false);
+  assert.equal(fourth.count, 4);
   assert.equal(fourth.autoBlocked, true);
   assert.equal(fourth.newlyAutoBlocked, true);
-  assert.equal(fourth.exactIp, true);
 
   const ipKey = await deriveManualIpKey(secret, ip);
   assert.equal(await isManualIpBlocked(db, ipKey, base + 4), true);
 
-  const sameIpAgain = await checkMonitorRateLimit({
-    db,
-    secret,
-    ip,
-    limit: 3,
-    nowMs: base + 4,
-  });
-  assert.equal(sameIpAgain.allowed, false);
-  assert.equal(sameIpAgain.alreadyBlocked, true);
-
-  const other = await checkMonitorRateLimit({
-    db,
-    secret,
-    ip: otherIp,
-    limit: 3,
-    windowMs: 60_000,
-    nowMs: base + 4,
-  });
+  const other = await checkMonitorRateLimit({ db, secret, ip: otherIp, limit: 3, nowMs: base + 4 });
   assert.equal(other.allowed, true);
   assert.equal(other.count, 1);
 
@@ -150,38 +138,48 @@ test("first three requests pass and fourth auto-blocks only the exact IP", async
   assert.equal(await isManualIpBlocked(db, otherKey, base + 4), false);
 });
 
-test("unblock clears both block row and old counters so access is really restored", async () => {
+test("parallel requests cannot all observe the same pre-increment count", async () => {
+  const db = fakeDb();
+  const secret = "parallel-rate-limit-secret";
+  const ip = "198.51.100.77";
+  const base = 1_800_000_050_000;
+
+  const results = await Promise.all(
+    Array.from({ length: 10 }, (_, index) =>
+      checkMonitorRateLimit({
+        db,
+        secret,
+        ip,
+        limit: 3,
+        windowMs: 60_000,
+        nowMs: base + index,
+      })
+    )
+  );
+
+  assert.equal(results.filter((result) => result.allowed).length, 3);
+  assert.equal(results.some((result) => result.count === 4 && result.allowed === false), true);
+  const ipKey = await deriveManualIpKey(secret, ip);
+  assert.equal(await isManualIpBlocked(db, ipKey, base + 20), true);
+});
+
+test("unblock clears the atomic counter so access is really restored", async () => {
   const db = fakeDb();
   const secret = "rate-limit-test-secret";
   const ip = "198.51.100.20";
   const base = 1_800_000_100_000;
 
   for (let i = 0; i < 4; i++) {
-    await checkMonitorRateLimit({
-      db,
-      secret,
-      ip,
-      limit: 3,
-      windowMs: 60_000,
-      nowMs: base + i,
-    });
+    await checkMonitorRateLimit({ db, secret, ip, limit: 3, windowMs: 60_000, nowMs: base + i });
   }
 
   const ipKey = await deriveManualIpKey(secret, ip);
   assert.equal(await isManualIpBlocked(db, ipKey, base + 5), true);
-
   assert.equal(await clearManualIpBlocked(db, ipKey), true);
   assert.equal(await clearMonitorRateLimitForIpKey(db, ipKey), true);
   assert.equal(await isManualIpBlocked(db, ipKey, base + 6), false);
 
-  const afterUnblock = await checkMonitorRateLimit({
-    db,
-    secret,
-    ip,
-    limit: 3,
-    windowMs: 60_000,
-    nowMs: base + 6,
-  });
+  const afterUnblock = await checkMonitorRateLimit({ db, secret, ip, limit: 3, windowMs: 60_000, nowMs: base + 6 });
   assert.equal(afterUnblock.allowed, true);
   assert.equal(afterUnblock.count, 1);
   assert.equal(afterUnblock.autoBlocked, false);
