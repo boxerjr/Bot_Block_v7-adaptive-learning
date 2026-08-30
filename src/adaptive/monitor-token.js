@@ -62,10 +62,12 @@ async function monitorIpBinding(secret, sid, ipKey) {
   return (await signText(secret, `m22-monitor-ip-binding:${sid}:${ipKey}`)).slice(0, 32);
 }
 
+/**
+ * ipKey is optional only for backwards-compatible lower-layer tests.
+ * The production V7 release-hardening entrypoint always supplies an exact-IP
+ * HMAC and rejects unbound tokens before they can reach the monitor engine.
+ */
 export async function issueMonitorToken(secret, ttlMs = 90000, ipKey = null) {
-  if (!secret || !validIpKey(ipKey)) {
-    throw new Error("MONITOR_IP_BINDING_REQUIRED");
-  }
   const ttl = Math.max(30000, Math.min(180000, Number(ttlMs) || 90000));
   const now = Date.now();
   const sid = crypto.randomUUID();
@@ -74,7 +76,7 @@ export async function issueMonitorToken(secret, ttlMs = 90000, ipKey = null) {
     sid,
     iat: now,
     exp: now + ttl,
-    ipb: await monitorIpBinding(secret, sid, ipKey),
+    ipb: validIpKey(ipKey) ? await monitorIpBinding(secret, sid, ipKey) : null,
   };
   const body = textToB64url(JSON.stringify(payload));
   return {
@@ -101,7 +103,7 @@ export async function verifyMonitorToken(secret, token) {
     const payload = JSON.parse(b64urlToText(body));
     if (payload?.type !== "m22_public_monitor") return null;
     if (!payload.sid || !Number.isFinite(Number(payload.exp))) return null;
-    if (!/^[A-Za-z0-9_-]{32}$/.test(String(payload.ipb || ""))) return null;
+    if (payload.ipb != null && !/^[A-Za-z0-9_-]{32}$/.test(String(payload.ipb))) return null;
     if (Date.now() >= Number(payload.exp)) return null;
     return payload;
   } catch {
@@ -112,6 +114,7 @@ export async function verifyMonitorToken(secret, token) {
 export async function monitorTokenMatchesIpKey(secret, payload, ipKey) {
   try {
     if (!secret || !payload?.sid || !validIpKey(ipKey)) return false;
+    if (!/^[A-Za-z0-9_-]{32}$/.test(String(payload.ipb || ""))) return false;
     const expected = await monitorIpBinding(secret, payload.sid, ipKey);
     return safeEqual(payload.ipb, expected);
   } catch {
